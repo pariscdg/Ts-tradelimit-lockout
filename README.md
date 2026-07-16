@@ -99,8 +99,7 @@ Sign in, wait for the confirmation, and then start `Tradesea_listener.py` again.
 
 Run `get_cookie.py` successfully at least once before creating the scheduled task. Since "access_token" expires after 8 hours, it is required that `get_cookie.py` is ran before starting `Tradesea_listener.py` again to acquire the latest "access_token".
 
-Create 2 tasks with a daily morning trigger and use these action settings:
-Note: Make sure task 1 is scheduled to run before task 2.
+Create 2 tasks with a daily morning trigger and use these action settings (Make sure task 1 is scheduled to run before task 2.)
 
 ## Task 1: "get_cookie"
 
