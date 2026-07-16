@@ -97,9 +97,40 @@ Sign in, wait for the confirmation, and then start `Tradesea_listener.py` again.
 
 ## Windows Task Scheduler
 
-Run `get_cookie.py` successfully at least once before creating the scheduled task.
+Run `get_cookie.py` successfully at least once before creating the scheduled task. Since "access_token" expires after 8 hours, it is required that `get_cookie.py` is ran before starting `Tradesea_listener.py` again to acquire the latest "access_token".
 
-Create a task with a daily morning trigger and use these action settings:
+Create 2 tasks with a daily morning trigger and use these action settings:
+Note: Make sure task 1 is scheduled to run before task 2.
+
+## Task 1: "get_cookie"
+
+- **Program/script:** the full path to `python.exe`, for example:
+
+  ```text
+  C:\Users\user\AppData\Local\Programs\Python\Python313\python.exe
+  ```
+
+- **Add arguments:**
+
+  ```text
+  get_cookie.py
+  ```
+
+- **Start in:**
+
+  ```text
+  C:\Users\user\Desktop\Tradesea-lockout
+  ```
+
+  (This is an example directory, you must use the correct folder path from where you installed this script.)
+
+- **Triggers:**
+  Weekly, Mon-Fri
+  9:29:00 EST (New York Market Open)
+  You can always customize these settings to your liking.
+
+
+  ## Task 2: "tradesea_listener"
 
 - **Program/script:** the full path to `python.exe`, for example:
 
@@ -118,6 +149,13 @@ Create a task with a daily morning trigger and use these action settings:
   ```text
   C:\Users\user\Desktop\Tradesea-lockout
   ```
+
+  (This is an example directory, you must use the correct folder path from where you installed this script.)
+
+  - **Triggers:**
+  Weekly, Mon-Fri
+  9:29:10 EST (New York Market Open)
+  You can always customize these settings to your liking.
 
 Use the actual result of the following command if Python is installed elsewhere:
 
@@ -181,12 +219,3 @@ The test file can be run with pytest:
 python -m pip install pytest
 python -m pytest -q
 ```
-
-`test_cookie.py` can be deleted if you do not intend to run the automated tests. Do not delete `Tradesea_auth.py`, because the main listener imports it.
-
-## Security
-
-- Never print, share, or commit an `access_token`.
-- Keep `.Tradesea-browser-profile` private; it contains authenticated browser data.
-- Keep `.gitignore` in place so the browser profile is not accidentally committed.
-- If the profile may have been copied or exposed, sign out of Tradesea and remove the profile before signing in again.
