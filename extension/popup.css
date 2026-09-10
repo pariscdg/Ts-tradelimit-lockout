@@ -1,0 +1,26 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101b19; color: #ecf3ed; }
+* { box-sizing: border-box; }
+body { margin: 0; width: 360px; }
+main { padding: 20px; }
+.eyebrow { font-size: 10px; letter-spacing: .17em; color: #a7c4b8; margin: 0 0 10px; font-weight: 600; }
+h1 { font-size: 26px; line-height: 1.15; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 600; }
+.status { border: 1px solid #3a5f50; background: #203d32; padding: 10px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; }
+.status[data-state="error"], .status[data-state="disconnected"], .status[data-state="pending"] { background: #45341b; border-color: #876531; color: #ffe5b5; }
+#message { font-size: 12px; line-height: 1.6; color: #c7d5cf; margin: 10px 0; }
+dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin: 14px 0; border-top: 1px solid #2e4239; }
+dl div { padding-top: 10px; }
+dt { color: #95afa3; font-size: 11px; }
+dd { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.note, .limit { font-size: 11px; line-height: 1.6; color: #a4b9ae; }
+.limit { margin-top: 12px; padding-top: 10px; border-top: 1px solid #2e4239; color: #b7ad98; }
+.selection { padding-top: 12px; border-top: 1px solid #2e4239; }
+.selection label { display: block; margin-bottom: 7px; color: #a7c4b8; font-size: 12px; }
+select, button { width: 100%; border: 1px solid #537465; border-radius: 6px; padding: 10px; font: inherit; font-size: 12px; }
+select { background: #162a21; color: #ecf3ed; }
+button { background: #c3e3ce; color: #14281d; font-weight: 650; margin-top: 8px; cursor: pointer; }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible { outline: 2px solid #d6efb4; outline-offset: 2px; }
+#other-lockouts { font-size: 11px; line-height: 1.6; color: #a7c4b8; margin: 12px 0; }
+#other-lockouts summary { cursor: pointer; }
+#other-lockouts-list { padding-left: 18px; max-height: 110px; overflow-y: auto; }
+#other-lockouts-list li { margin-bottom: 6px; overflow-wrap: anywhere; }

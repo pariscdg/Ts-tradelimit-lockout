@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "TradeSea One Trade",
+  "version": "2.2.1",
+  "minimum_chrome_version": "120",
+  "description": "One completed trade, then an eight-hour TradeSea account lockout in your regular browser.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "https://app.tradesea.ai/*",
+    "https://prod-identity.tradesea.ai/*",
+    "https://prod-trade-read.tradesea.ai/*",
+    "https://api-trades-r-delprod.tradesea.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "TradeSea One Trade",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.tradesea.ai/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://app.tradesea.ai/*"
+      ],
+      "js": [
+        "observe.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "incognito": "not_allowed",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArryF+xPXqExxTkf3NywJkmUkAHiFG40k1ZBq8nZjrhAzSffjUL/qUyjmS8lFD5u+4GgnDvSv9dd+oIlTCDOT1+0LOnA1ZERMhfnfKMnAu7wCyyxwoXGSNdsgqJsrUKD8pZk1oG1QipCzPo/bebeculWpIAhheZAOzSZ81tyrJG2QEdR4WLRUdeMQvX4DAB0CcruLXfNt8dAyDzJg+kk2VFTcBQCpUAMNKiTM3KU5cQx+sYfAOGAfpv7oXpUclEeCoBCqo4zF6Nh327nIYVw1S1ey41UmMwrJrLgvB9EBChJh1EIKxULewUKFlugVVqXc39aGa81RRBNxOlSYcZPqSQIDAQAB"
+}

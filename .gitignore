@@ -1,3 +1,22 @@
+# Private account and browser data
+extension/account.json
+.tradesea-account-id
 .tradesea-browser-profile/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local tools, caches, and generated files
+node_modules/
 __pycache__/
 .pytest_cache/
+.vscode/
+.agents/
+backup-*/
+*.log
+*.zip
+.DS_Store
+Thumbs.db

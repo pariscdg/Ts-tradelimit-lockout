@@ -1,0 +1,15 @@
+{
+  "event": "unifiedSnapshot",
+  "data": {
+    "eventTime": 1800000000,
+    "orders": [
+      {"id": "rejected-order", "accountId": "external-A", "instrument": "CME-Delayed:NQ", "qty": 1, "side": "buy", "type": "market", "status": "cancelled", "message": {"text": "Rejected at RMS - Cannot open position while in no trade time window", "type": "warning"}},
+      {"id": "filled-close", "accountId": "external-A", "instrument": "CME-Delayed:NQ", "qty": 1, "side": "sell", "status": "filled", "filledQty": 1},
+      {"id": "filled-open", "accountId": "external-A", "instrument": "CME-Delayed:NQ", "qty": 1, "side": "buy", "status": "filled", "filledQty": 1}
+    ],
+    "userFullStates": {
+      "aggregated": {"balance": 10030, "realizedPl": 30, "commission": 5},
+      "accounts": {"external-A": {"balance": 10030, "realizedPl": 30, "commission": 5}}
+    }
+  }
+}

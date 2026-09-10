@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TradeSea One Trade</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">TRADESEA ONE TRADE</p>
+    <h1>One trade.<br>Eight hours off.</h1>
+    <div id="status" class="status" aria-live="polite">Checking protection…</div>
+    <p id="message">Open TradeSea in your regular Chrome profile.</p>
+    <dl>
+      <div><dt>Protected account</dt><dd id="account">Choose an account below</dd></div>
+      <div><dt>Lockout ends</dt><dd id="end">—</dd></div>
+    </dl>
+    <section class="selection" aria-label="Choose the protected account">
+      <label for="account-choice">Account to protect</label>
+      <select id="account-choice" disabled><option value="">Loading your accounts…</option></select>
+      <button id="protect-account" type="button" disabled>Protect this account</button>
+      <p id="selection-message" class="note" aria-live="polite">Checking available accounts…</p>
+    </section>
+    <details id="other-lockouts" hidden>
+      <summary id="other-lockouts-label">Other locked accounts</summary>
+      <ul id="other-lockouts-list"></ul>
+    </details>
+    <p class="note">The lockout starts when your open position returns to flat. Keep one TradeSea tab connected while trading.</p>
+    <p class="limit">Local protection can be disabled by this computer’s owner. An irreversible lockout requires TradeSea to reject early changes; that behavior is unverified.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
