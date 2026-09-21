@@ -100,17 +100,13 @@ export class ProtectionManager {
       ? {status: "unselected", message: "Choose an account below to start protection.",
         accountId: null, accountName: null, readHost: null, end: null, secondsRemaining: null, openQuantity: 0}
       : this.active?.view() ?? {status: "starting", message: "Checking protection…"};
-    const lockouts = (this.ledger?.accounts ?? []).filter(record => record.state.lock).map(record => ({
+    const lockouts = (this.ledger?.accounts ?? []).filter(record => this.engines.get(record.id)?.activeLock()).map(record => ({
       accountId: record.state.accountId, accountName: record.state.accountName,
       externalAccountId: record.state.externalAccountId, readHost: record.state.readHost,
       end: record.state.lock.end, confirmed: record.state.lock.confirmed, error: record.state.error,
       selected: record.id === this.ledger.active
     }));
-    const view = {...current, canSelect: this.canSelect(), lockouts};
-    const attention = lockouts.find(lock => !lock.selected && (lock.error || !lock.confirmed));
-    if (attention && current.status !== "error") return {...view, status: "error",
-      message: `${attention.accountName}: ${attention.error || "The saved lockout is awaiting server confirmation."}`};
-    return view;
+    return {...current, canSelect: this.canSelect(), lockouts};
   }
 
   async emit() { const view = this.view(); await this.publish(view); return view; }
@@ -153,23 +149,23 @@ export class ProtectionManager {
         const account = accounts[index];
         const check = checks[index];
         const record = this.findRecord(account);
-        if (record && check.status === "fulfilled" && record.state.revision === revisions.get(record.id) &&
-            check.value.serverNow >= record.state.serverTimeFloor) {
+        const fresh = check.status === "fulfilled" && (!record ||
+          (record.state.revision === revisions.get(record.id) && check.value.serverNow >= record.state.serverTimeFloor));
+        if (record && fresh) {
           const engine = this.engines.get(record.id);
           await engine.enqueue(async () => {
             await engine.adoptAccount(account);
             await engine.applyLockResult(check.value);
           });
         }
-        const local = record && this.engines.get(record.id).state;
-        const remote = check.status === "fulfilled" && check.value.remote;
+        const local = record && this.engines.get(record.id).activeLock();
+        const remote = fresh && check.value.remote;
         const activeRemote = remote && remote.end > check.value.serverNow;
         const scheduled = activeRemote && remote.start > check.value.serverNow;
-        const locked = !!local?.lock || account.restricted || (activeRemote && !scheduled);
-        const end = Math.max(local?.lock?.end ?? 0, activeRemote ? remote.end : 0) || null;
-        choices.push({...account, end, selectable: !locked && !scheduled && check.status === "fulfilled",
-          lockStatus: locked ? (local?.lock && !local.lock.confirmed ? "pending" : "locked")
-            : scheduled ? "scheduled" : check.status === "rejected" ? "unknown" : "available"});
+        const locked = !!local || (activeRemote && !scheduled);
+        const end = (local?.end ?? (activeRemote ? remote.end : null)) || null;
+        choices.push({...account, end, selectable: !locked && !scheduled && fresh,
+          lockStatus: locked ? "locked" : scheduled ? "scheduled" : !fresh ? "unknown" : "available"});
       }
       await this.emit();
       return choices;
@@ -182,28 +178,19 @@ export class ProtectionManager {
         if (!this.canSelect()) throw new Error("Finish the open trade before changing the protected account.");
         const previous = this.active;
         if (previous.state.lock) {
-          // Preserve even a pending deadline before allowing another account.
           await previous.save();
-          await previous.guard(true, previous.accountId);
+          await previous.guard(!!previous.activeLock(), previous.accountId);
         } else if (previous.state.externalAccountId) {
           const current = await this.api.account(previous.accountId, {
             externalAccountId: previous.state.externalAccountId, readHost: previous.state.readHost
           });
-          if (current.restricted) {
-            // A broker-locked account may no longer expose its position API.
-            // Its freshly verified Locked flag permits choosing another account;
-            // any extension deadline was retained by the branch above.
-            await previous.enqueue(async () => previous.adoptAccount(current));
-            if (!previous.verified) throw new Error(previous.state.error || "Account verification failed.");
-          } else {
-            const checked = await previous.maintain({force: true, connected: false});
-            if (checked.status === "error") throw new Error(checked.message);
-          }
+          await previous.enqueue(async () => previous.adoptAccount(current));
+          const checked = await previous.maintain({force: true, connected: false});
+          if (checked.status === "error") throw new Error(checked.message);
           if (!this.canSelect()) throw new Error("Finish the open trade before changing the protected account.");
         }
 
         const account = await this.api.account(accountId);
-        if (account.restricted) throw new Error("That account is marked Locked by TradeSea. Choose an unlocked account.");
         let record = this.findRecord(account);
         if (!record) {
           const id = Math.max(...this.ledger.accounts.map(item => item.id)) + 1;

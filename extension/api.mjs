@@ -90,7 +90,8 @@ export class TradeSeaApi {
     // Cookies are supplied by Chrome on EVERY request. No copied or cached token.
     const result = await this.request(`${IDENTITY}/eum/v1/prop-fund/${encodeURIComponent(accountId)}/lockout`, "PUT", lockPayload(lock), "Lockout request");
     if (!["ok", "success"].includes(result.body?.status)) throw new Error("TradeSea did not accept the lockout request.");
-    // A PUT acknowledgement alone is insufficient; confirm the persisted deadline.
-    return this.getLock(accountId);
+    // Accept TradeSea's response once. Normal account-status reads update the
+    // dropdown; they never confirm/retry this request or create another lock.
+    return {accepted: true, serverNow: result.serverNow};
   }
 }

@@ -12,8 +12,10 @@ A Chrome extension that starts an eight-hour account lockout when an open trade 
 
 Keep the TradeSea tab open while trading and check that the extension shows **Monitoring**.
 
-Locked accounts are marked in the dropdown. You can protect another available account while existing lockouts keep their deadlines.
+Accounts with an active TradeSea lockout show **Locked until** and their end time in the dropdown. Other accounts remain available.
 
-TradeSea must confirm the server lockout. Local extension protection can be disabled and cannot guarantee an irreversible lockout.
+The extension sends one eight-hour lockout request after a completed trade. There is no confirmation-pending workflow or automatic resubmission. TradeSea's current timer controls the displayed lock status.
+
+Local extension protection can be disabled and cannot guarantee an irreversible lockout.
 
 Tests: run `npm test` with Node.js 22 or newer. Tests use simulated accounts and do not place trades.

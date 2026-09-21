@@ -5,7 +5,7 @@ main { padding: 20px; }
 .eyebrow { font-size: 10px; letter-spacing: .17em; color: #a7c4b8; margin: 0 0 10px; font-weight: 600; }
 h1 { font-size: 26px; line-height: 1.15; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 600; }
 .status { border: 1px solid #3a5f50; background: #203d32; padding: 10px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; }
-.status[data-state="error"], .status[data-state="disconnected"], .status[data-state="pending"] { background: #45341b; border-color: #876531; color: #ffe5b5; }
+.status[data-state="error"], .status[data-state="disconnected"] { background: #45341b; border-color: #876531; color: #ffe5b5; }
 #message { font-size: 12px; line-height: 1.6; color: #c7d5cf; margin: 10px 0; }
 dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin: 14px 0; border-top: 1px solid #2e4239; }
 dl div { padding-top: 10px; }

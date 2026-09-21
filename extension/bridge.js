@@ -5,7 +5,7 @@
   let notice;
   let sending = Promise.resolve();
   const show = view => {
-    const warning = ["error", "pending", "disconnected"].includes(view?.status);
+    const warning = ["error", "disconnected"].includes(view?.status);
     if (!warning) { notice?.remove(); notice = null; return; }
     if (!document.documentElement) return;
     if (!notice) {

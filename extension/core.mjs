@@ -121,7 +121,7 @@ export function applyPositions(state, frame, serverNow) {
 export function readServerLock(body) {
   if (!["ok", "success"].includes(body?.status)) throw new Error("TradeSea did not accept the lockout request.");
   const data = body.data;
-  if (!data || typeof data !== "object") throw new Error("Unrecognized TradeSea lockout response.");
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Unrecognized TradeSea lockout response.");
   const start = data.lockoutStartTimeEpoch;
   const end = data.lockoutEndTimeEpoch;
   if ((start === null || start === undefined || start === 0) &&
@@ -132,27 +132,27 @@ export function readServerLock(body) {
   return {start, end};
 }
 
-// A local deadline can only grow. Existing longer server locks are preserved.
-// Only a successful server read, using server time, is allowed to expire a lock.
+// The current server timer determines whether an account is locked. An old
+// failed request is not a lockout and must never require manual confirmation.
 export function reconcileLock(state, remote, serverNow) {
   if (!Number.isFinite(serverNow) || serverNow <= 0) throw new Error("TradeSea did not provide a valid server clock.");
+  if (serverNow < state.serverTimeFloor) throw new Error("TradeSea returned an outdated account status. Refresh before trading.");
+  if (remote && remote.end > serverNow && remote.start > serverNow) {
+    throw new Error("A future personal lockout is scheduled. Protection will not replace it; check the TradeSea lockout panel before trading.");
+  }
   const next = {...state, serverTimeFloor: Math.max(state.serverTimeFloor, serverNow)};
-  if (next.lock && serverNow >= next.lock.end && next.lock.confirmed) {
-    next.lock = null;
+  next.lock = remote && remote.end > serverNow ? {...remote, reason: "existing", confirmed: true} : null;
+  if (state.lock && !next.lock) {
     next.hasOpen = false;
     next.positions = {};
     next.snapshotReady = false;
   }
-  if (remote && remote.end > serverNow) {
-    if (!next.lock && remote.start > serverNow) {
-      throw new Error("A future personal lockout is scheduled. Protection will not replace it; check the TradeSea lockout panel before trading.");
-    }
-    if (!next.lock) next.lock = {...remote, reason: "existing", confirmed: true};
-    else if (remote.start <= serverNow && remote.end >= next.lock.end) {
-      next.lock = {...next.lock, end: remote.end, confirmed: true};
-    } else next.lock = {...next.lock, end: Math.max(next.lock.end, remote.end), confirmed: false};
-  } else if (next.lock) next.lock = {...next.lock, confirmed: false};
+  if (legacyConfirmationError(next.error)) next.error = null;
   return next;
+}
+
+export function legacyConfirmationError(message) {
+  return typeof message === "string" && /never confirmed|not confirmed the full lockout|awaiting server confirmation|confirmation is pending/i.test(message);
 }
 
 export function lockPayload(lock) {

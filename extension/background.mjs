@@ -15,9 +15,9 @@ async function publish(view) {
   currentView = view;
   if (view.status === "ready" && !connected(view.accountId, view.readHost)) currentView = {...view, status: "disconnected",
     message: "Select this protected account in TradeSea and refresh that tab to connect live monitoring."};
-  const text = {error: "!", disconnected: "!", locked: "8h", pending: "…", starting: "…", unselected: "…"}[currentView.status] ?? "";
+  const text = {error: "!", disconnected: "!", locked: "Lock", starting: "…", unselected: "…"}[currentView.status] ?? "";
   await chrome.action.setBadgeText({text});
-  await chrome.action.setBadgeBackgroundColor({color: ["error", "disconnected", "pending"].includes(currentView.status) ? "#a15c0b" : "#205b4a"});
+  await chrome.action.setBadgeBackgroundColor({color: ["error", "disconnected"].includes(currentView.status) ? "#a15c0b" : "#205b4a"});
   await chrome.action.setTitle({title: `TradeSea One Trade — ${currentView.message}`});
   for (const tabId of tabs) {
     try { await chrome.tabs.sendMessage(tabId, {type: "status", view: currentView}); }

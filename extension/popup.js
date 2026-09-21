@@ -1,4 +1,4 @@
-const labels = {ready: "Monitoring", locked: "Account lockout confirmed", pending: "Lockout awaiting confirmation",
+const labels = {ready: "Monitoring", locked: "Account locked",
   error: "Protection needs attention", disconnected: "Live monitoring disconnected", starting: "Checking protection…",
   unselected: "Choose an account"};
 const choice = document.getElementById("account-choice");
@@ -19,7 +19,7 @@ function renderChoices(view) {
   const choices = accounts.map(account => {
     const lock = locks.find(item => item.accountId === account.accountId ||
       (item.externalAccountId === account.externalAccountId && item.readHost === account.readHost));
-    return lock ? {...account, selectable: false, lockStatus: lock.confirmed ? "locked" : "pending"} : account;
+    return lock ? {...account, end: lock.end, selectable: false, lockStatus: "locked"} : account;
   });
   const signature = JSON.stringify(choices);
   if (signature === optionsSignature) return;
@@ -30,13 +30,14 @@ function renderChoices(view) {
   placeholder.value = "";
   placeholder.textContent = "Choose an account";
   choice.append(placeholder);
-  const states = {locked: "Locked", pending: "Locked · confirmation pending", scheduled: "Scheduled lockout", unknown: "Status unavailable"};
+  const states = {scheduled: "Scheduled lockout", unknown: "Status unavailable"};
   for (const account of choices) {
     const option = document.createElement("option");
     option.value = account.accountId;
     option.disabled = account.selectable !== true;
-    option.textContent = account.accountName + (account.accountName !== account.externalAccountId ? ` (${account.externalAccountId})` : "") +
-      (states[account.lockStatus] ? ` · ${states[account.lockStatus]}` : "") +
+    const status = account.lockStatus === "locked" && account.end
+      ? `Locked until ${new Date(account.end * 1000).toLocaleString()}` : states[account.lockStatus];
+    option.textContent = account.accountName + (status ? ` · ${status}` : "") +
       (account.accountId === selectedAccountId ? " · selected in TradeSea" : "");
     choice.append(option);
   }
@@ -59,7 +60,7 @@ function render(view) {
   list.replaceChildren();
   for (const lock of others) {
     const item = document.createElement("li");
-    item.textContent = `${lock.accountName} · until ${new Date(lock.end * 1000).toLocaleString()}${lock.confirmed ? "" : " · confirmation pending"}`;
+    item.textContent = `${lock.accountName} · until ${new Date(lock.end * 1000).toLocaleString()}`;
     list.append(item);
   }
   canSelect = view.canSelect === true;

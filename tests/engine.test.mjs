@@ -22,7 +22,7 @@ function harness(saved) {
       h.puts.push(structuredClone(lock));
       if (h.failPut) throw new Error("Offline");
       if (!h.acknowledgedOnly) h.remote = {start: lock.start, end: lock.end};
-      return {remote: h.remote, serverNow: h.seconds};
+      return {accepted: true, serverNow: h.seconds};
     }
   };
   h.make = () => new ProtectionEngine({accountId: "internal-A", storage: h.storage, api: h.api,
@@ -31,7 +31,7 @@ function harness(saved) {
   return h;
 }
 
-test("engine completes one trade and persists confirmation", async () => {
+test("engine completes one trade and sends one eight-hour request", async () => {
   const h = harness();
   assert.equal((await h.engine.maintain()).status, "ready");
   await h.engine.receive(frame(1));
@@ -48,7 +48,7 @@ test("concurrent close events submit a single lockout", async () => {
   await Promise.all(Array.from({length: 12}, () => h.engine.receive(frame(0))));
   assert.equal(h.puts.length, 1);
 });
-test("network failure survives a worker restart and retries the original deadline", async () => {
+test("a failed request does not get resubmitted after a worker restart", async () => {
   const h = harness();
   await h.engine.maintain();
   await h.engine.receive(frame(1));
@@ -58,19 +58,21 @@ test("network failure survives a worker restart and retries the original deadlin
   h.seconds += 30;
   h.failPut = false;
   h.engine = h.make();
-  assert.equal((await h.engine.maintain({force: true})).status, "locked");
-  assert.equal(h.saved.lock.end, end);
+  assert.equal((await h.engine.maintain({force: true})).status, "ready");
+  assert.equal(h.saved.lock, null);
   assert.equal(h.puts.at(-1).end, end);
+  assert.equal(h.puts.length, 1);
+  assert.equal(h.guards.at(-1), false);
 });
-test("a five-second remote replacement is repaired using the recorded deadline", async () => {
+test("maintenance reads the actual server timer without sending a repair request", async () => {
   const h = harness();
   await h.engine.maintain();
   await h.engine.receive(frame(1));
   await h.engine.receive(frame(0));
   h.remote.end = epoch + 5;
   await h.engine.maintain({force: true});
-  assert.equal(h.remote.end, epoch + 28800);
-  assert.equal(h.puts.length, 2);
+  assert.equal(h.saved.lock.end, epoch + 5);
+  assert.equal(h.puts.length, 1);
 });
 test("existing longer server locks are preserved without PUT", async () => {
   const h = harness();
@@ -79,13 +81,16 @@ test("existing longer server locks are preserved without PUT", async () => {
   assert.equal(h.saved.lock.end, epoch + 40000);
   assert.equal(h.puts.length, 0);
 });
-test("server acknowledgement without persisted lock does not claim success", async () => {
+test("a successful request needs no confirmation; a later unlocked status clears it", async () => {
   const h = harness();
   await h.engine.maintain();
   await h.engine.receive(frame(1));
   h.acknowledgedOnly = true;
-  assert.equal((await h.engine.receive(frame(0))).status, "error");
-  assert.equal(h.saved.lock.confirmed, false);
+  assert.equal((await h.engine.receive(frame(0))).status, "locked");
+  assert.equal(h.apiCalls.filter(call => call === "getLock").length, 1, "no extra confirmation read after submission");
+  assert.equal((await h.engine.maintain({force: true})).status, "ready");
+  assert.equal(h.saved.lock, null);
+  assert.equal(h.puts.length, 1);
 });
 test("storage failure prevents sending an unrecorded deadline", async () => {
   const h = harness();
@@ -125,7 +130,7 @@ test("server-check failure is visible and does not erase an existing deadline", 
   assert.equal(view.end, epoch + 28800);
   assert.equal(h.saved.lock.end, epoch + 28800);
 });
-test("a missed, unconfirmed deadline never silently re-arms trading", async () => {
+test("an expired unconfirmed demo request clears after TradeSea reports no lock", async () => {
   const h = harness();
   await h.engine.maintain();
   await h.engine.receive(frame(1));
@@ -133,6 +138,11 @@ test("a missed, unconfirmed deadline never silently re-arms trading", async () =
   await h.engine.receive(frame(0));
   h.failPut = false;
   h.seconds += 30000;
-  assert.equal((await h.engine.maintain({force: true})).status, "error");
-  assert.equal(h.saved.lock.end, epoch + 28800);
+  h.saved.error = "The lockout was never confirmed before its deadline. Protection needs attention; trading has not been re-armed.";
+  h.engine = h.make();
+  assert.equal((await h.engine.maintain({force: true})).status, "ready");
+  assert.equal(h.saved.lock, null);
+  assert.equal(h.saved.error, null);
+  assert.equal(h.puts.length, 1);
+  assert.equal(h.guards.at(-1), false);
 });

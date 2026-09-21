@@ -37,7 +37,7 @@ function fixture(saved, configuredAccountId = "A") {
       h.puts.push({id, ...structuredClone(lock)});
       if (h.failPut) throw new Error("Offline");
       h.remote[id] = {start: lock.start, end: lock.end};
-      return {remote: structuredClone(h.remote[id]), serverNow: h.now};
+      return {accepted: true, serverNow: h.now};
     }
   };
   h.storage = {load: async () => structuredClone(h.saved), save: async ledger => {
@@ -100,7 +100,7 @@ test("legacy migration preserves the exact existing deadline and restores its ru
   assert.equal(h.rules.get(1).condition.urlFilter.includes("/A/"), true);
 });
 
-test("locked A stays locked while B is protected, including after a worker restart and a short remote replacement", async () => {
+test("locked A stays separate from selected B and follows the server timer after restart", async () => {
   const h = fixture();
   await h.manager.maintain();
   await h.trade("A");
@@ -116,9 +116,10 @@ test("locked A stays locked while B is protected, including after a worker resta
   h.remote.A.end = epoch + 5;
   const view = await h.manager.maintain({force: true});
   assert.equal(view.accountId, "B");
-  assert.equal(h.remote.A.end, deadline);
-  assert.equal(view.lockouts.find(lock => lock.accountId === "A").end, deadline);
+  assert.equal(h.remote.A.end, epoch + 5);
+  assert.equal(view.lockouts.find(lock => lock.accountId === "A").end, epoch + 5);
   assert.equal(h.puts.at(-1).id, "A");
+  assert.equal(h.puts.length, 1, "status reads do not send repair requests");
 });
 
 test("two completed trades on two selected accounts keep independent deadlines and browser rules", async () => {
@@ -147,7 +148,7 @@ test("two completed trades on two selected accounts keep independent deadlines a
   assert.equal(options.find(a => a.accountId === "B").selectable, false);
 });
 
-test("switching away from a pending lock retains its retry and original deadline", async () => {
+test("a failed lock request on another account does not warn or block the selected account", async () => {
   const h = fixture();
   await h.manager.maintain();
   h.failPut = true;
@@ -155,20 +156,22 @@ test("switching away from a pending lock retains its retry and original deadline
   const end = h.record("A").state.lock.end;
   await h.manager.selectAccount("B");
   assert.equal(h.manager.accountId, "B");
-  assert.equal(h.manager.view().status, "error", "unconfirmed older protection remains visible");
+  assert.equal(h.manager.view().status, "ready");
+  assert.equal(h.manager.view().lockouts.length, 0);
   h.failPut = false;
   await h.manager.maintain({force: true});
-  assert.equal(h.remote.A.end, end);
+  assert.equal(h.remote.A, undefined);
+  assert.equal(h.record("A").state.lock, null);
+  assert.equal(h.puts.length, 1);
   assert.equal(h.manager.view().status, "ready");
 });
 
-test("locked, newly locked, restricted, scheduled, and unknown target accounts are never treated as selectable", async () => {
-  for (const condition of ["locked", "restricted", "scheduled", "unknown"]) {
+test("active, newly locked, scheduled, and unknown target accounts are never treated as selectable", async () => {
+  for (const condition of ["locked", "scheduled", "unknown"]) {
     const h = fixture();
     await h.manager.maintain();
     if (condition === "locked") h.remote.B = {start: epoch - 5, end: epoch + 28800};
     if (condition === "scheduled") h.remote.B = {start: epoch + 100, end: epoch + 28800};
-    if (condition === "restricted") h.accounts[1].restricted = true;
     if (condition === "unknown") h.failed.add("B");
     assert.equal((await h.manager.choices()).find(account => account.accountId === "B").selectable, false);
     assert.ok((await h.manager.selectAccount("B")).selectionError);
@@ -214,7 +217,8 @@ test("one account going offline cannot erase its deadline or stop checks on the 
   await h.manager.maintain({force: true});
   assert.ok(h.calls.slice(before).some(c => c.id === "B"));
   assert.equal(h.record("A").state.lock.end, epoch + 28800);
-  assert.equal(h.manager.view().status, "error");
+  assert.equal(h.manager.view().status, "ready");
+  assert.equal(h.manager.view().lockouts.find(lock => lock.accountId === "A").error, "Offline");
   assert.equal(h.manager.view().canSelect, true);
 });
 
@@ -283,7 +287,7 @@ test("an old account's queued empty snapshot cannot close a newly selected accou
   assert.equal(h.puts.length, 0);
 });
 
-test("slow account-status lookups cannot delay a trade lock or apply stale data over its confirmation", {timeout: 2000}, async () => {
+test("slow account-status lookups cannot delay a trade request or apply stale unlocked data over it", {timeout: 2000}, async () => {
   const h = fixture();
   await h.manager.maintain();
   const getLock = h.api.getLock;
@@ -304,13 +308,66 @@ test("slow account-status lookups cannot delay a trade lock or apply stale data 
   assert.equal(h.record("A").state.lock.confirmed, true);
 });
 
-test("a freshly verified broker-locked account can be left even if its position API is unavailable", async () => {
+test("an account with an active server timer can be left even if its position API is unavailable", async () => {
   const h = fixture();
   await h.manager.maintain();
   h.accounts[0].restricted = true;
+  h.remote.A = {start: epoch - 10, end: epoch + 1000};
   h.failedSnapshots.add("A");
   const result = await h.manager.selectAccount("B");
   assert.equal(result.selectionError, undefined);
   assert.equal(result.accountId, "B");
   assert.equal((await h.manager.choices()).find(account => account.accountId === "A").lockStatus, "locked");
+});
+
+test("a stale demo confirmation does not lock its dropdown row or contaminate another account's timer", async () => {
+  const demo = {...stateA(), accountName: "Demo Account", serverTimeFloor: epoch - 40000,
+    lock: {start: epoch - 40000, end: epoch - 11200, reason: "trade", confirmed: false},
+    error: "The lockout was never confirmed before its deadline. Protection needs attention; trading has not been re-armed."};
+  const other = {...newState("B"), accountName: "Account B", externalAccountId: "external-B", readHost: host};
+  const h = fixture({version: 2, active: 1, accounts: [{id: 1, state: demo}, {id: 2, state: other}]});
+  h.remote.B = {start: epoch - 100, end: epoch + 3600};
+  const choices = await h.manager.choices();
+  assert.equal(choices.find(a => a.accountId === "A").lockStatus, "available");
+  assert.equal(choices.find(a => a.accountId === "A").selectable, true);
+  assert.equal(choices.find(a => a.accountId === "A").end, null);
+  assert.equal(choices.find(a => a.accountId === "B").lockStatus, "locked");
+  assert.equal(choices.find(a => a.accountId === "B").selectable, false);
+  assert.equal(choices.find(a => a.accountId === "B").end, epoch + 3600);
+  assert.equal(choices.find(a => a.accountId === "C").selectable, true);
+  assert.equal(h.record("A").state.lock, null);
+  assert.equal(h.record("A").state.error, null);
+  assert.equal((await h.manager.maintain({force: true})).status, "ready");
+  assert.deepEqual(h.manager.view().lockouts.map(lock => lock.accountId), ["B"]);
+  assert.equal(h.rules.has(1), false);
+  assert.equal(h.rules.has(2), true);
+  assert.equal(h.puts.length, 0, "repairing stale UI state never starts a real lockout");
+});
+
+test("a broker Locked label without an active timer is not a timed lockout in the dropdown", async () => {
+  const h = fixture();
+  h.accounts[1].restricted = true;
+  h.remote.B = {start: epoch - 7200, end: epoch - 1};
+  const choices = await h.manager.choices();
+  const option = choices.find(a => a.accountId === "B");
+  assert.equal(option.lockStatus, "available");
+  assert.equal(option.selectable, true);
+  assert.equal(option.end, null);
+  const selected = await h.manager.selectAccount("B");
+  assert.equal(selected.accountId, "B");
+  assert.equal(selected.selectionError, undefined);
+  assert.equal(h.puts.length, 0);
+});
+
+test("a failed status read cannot turn an old pending request into a Locked label", async () => {
+  const old = {...stateA(), lock: {start: epoch - 40000, end: epoch - 11200, reason: "trade", confirmed: false}};
+  const h = fixture(old);
+  h.failed.add("A");
+  const choice = (await h.manager.choices()).find(a => a.accountId === "A");
+  assert.equal(choice.lockStatus, "unknown");
+  assert.equal(choice.end, null);
+  assert.equal(h.manager.view().lockouts.length, 0);
+  assert.equal(h.puts.length, 0);
+  h.failed.delete("A");
+  assert.equal((await h.manager.choices()).find(a => a.accountId === "A").selectable, true);
 });

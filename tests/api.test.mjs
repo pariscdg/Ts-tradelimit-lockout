@@ -22,23 +22,23 @@ test("default fetch keeps the worker-global receiver required by Chrome", async 
   try {
     const api = new TradeSeaApi();
     const result = await api.setLock("saved-account", lock);
-    assert.deepEqual(result.remote, lock);
-    assert.equal(receivers.length, 2);
+    assert.equal(result.accepted, true);
+    assert.equal(receivers.length, 1);
     assert.ok(receivers.every(receiver => receiver === globalThis));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("each lock request uses Chrome's current cookies and verifies the persisted deadline", async () => {
+test("each lock request uses Chrome's current cookies once without a confirmation GET", async () => {
   const calls = [];
   const api = new TradeSeaApi(async (url, options) => {
     calls.push({url, options});
     return response(lockBody, options.method === "PUT" ? 201 : 200);
   });
   const result = await api.setLock("saved-account", lock);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls.map(c => c.options.method), ["PUT", "GET"]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map(c => c.options.method), ["PUT"]);
   for (const {url, options} of calls) {
     assert.equal(url, "https://prod-identity.tradesea.ai/eum/v1/prop-fund/saved-account/lockout");
     assert.equal(options.credentials, "include");
@@ -49,7 +49,7 @@ test("each lock request uses Chrome's current cookies and verifies the persisted
     assert.ok(options.signal);
   }
   assert.deepEqual(JSON.parse(calls[0].options.body), lockBody.data);
-  assert.deepEqual(result.remote, lock);
+  assert.equal(result.accepted, true);
   assert.equal(result.serverNow, time);
 });
 test("HTTP success containing application failure is not accepted", async () => {

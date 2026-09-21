@@ -1,4 +1,4 @@
-import {newState, validateState, parseFrame, applyPositions, reconcileLock, quantity} from "./core.mjs";
+import {newState, validateState, parseFrame, applyPositions, reconcileLock, quantity, legacyConfirmationError} from "./core.mjs";
 
 // The service worker is the sole writer. Serializing operations prevents two
 // tabs, alarm callbacks, or duplicate close events from racing the lock ledger.
@@ -19,8 +19,9 @@ export class ProtectionEngine {
           const saved = await this.storage.load();
           this.state = saved === undefined ? newState(this.accountId) : validateState(saved, this.accountId);
           this.state = {...this.state, snapshotReady: false};
+          if (legacyConfirmationError(this.state.error)) this.state.error = null;
           // Reinstall the browser safeguard before any network activity.
-          await this.guard(this.state.lock !== null, this.accountId);
+          await this.guard(this.state.lock?.confirmed === true, this.accountId);
         }
         await action();
       } catch (error) {
@@ -50,6 +51,11 @@ export class ProtectionEngine {
     return this.anchor ? this.anchor.seconds + Math.max(0, this.monotonic() - this.anchor.at) / 1000 : NaN;
   }
 
+  activeLock() {
+    const lock = this.state?.lock;
+    return lock?.confirmed && this.lastCheck !== -Infinity && lock.end > this.now() ? lock : null;
+  }
+
   async save() { await this.storage.save(this.state); }
 
   async identify() {
@@ -73,7 +79,7 @@ export class ProtectionEngine {
     this.setClock(account.serverNow);
     this.verified = true;
     await this.save();
-    await this.guard(this.state.lock !== null, this.accountId);
+    await this.guard(this.state.lock?.confirmed === true, this.accountId);
   }
 
   async checkLock() {
@@ -92,17 +98,17 @@ export class ProtectionEngine {
   async enforce() {
     const lock = this.state.lock;
     if (!lock || lock.confirmed) return;
-    // The deadline was durably saved BEFORE this method was called. Retries
-    // reuse it. We never send a reduced deadline or a server unlock request.
-    await this.guard(true, this.accountId);
-    if (this.now() >= lock.end) {
-      throw new Error("The lockout was never confirmed before its deadline. Protection needs attention; trading has not been re-armed.");
-    }
+    // Called only by a newly completed trade. Maintenance and dropdown reads
+    // never resubmit a failed/old request, including after a worker restart.
     const result = await this.api.setLock(this.accountId, lock);
+    if (result.accepted !== true) throw new Error("TradeSea did not accept the lockout request.");
     this.setClock(result.serverNow);
-    this.state = reconcileLock(this.state, result.remote, result.serverNow);
+    // Keep the legacy field for saved-state compatibility. It now records a
+    // successful request/read, without a separate confirmation workflow.
+    this.state = {...this.state, lock: {...lock, confirmed: true}, error: null};
+    this.lastCheck = this.monotonic();
     await this.save();
-    if (!this.state.lock?.confirmed) throw new Error("TradeSea has not confirmed the full lockout. Retrying with the saved end time.");
+    await this.guard(true, this.accountId);
   }
 
   async accept(frame) {
@@ -149,7 +155,6 @@ export class ProtectionEngine {
     return this.enqueue(async () => {
       await this.identify();
       if (force || this.monotonic() - this.lastCheck >= 15000) await this.checkLock();
-      await this.enforce();
       if (monitor && !this.state.lock && (!this.state.snapshotReady || !connected)) {
         const result = await this.api.snapshot(this.state);
         this.setClock(result.serverNow);
@@ -167,8 +172,8 @@ export class ProtectionEngine {
       secondsRemaining: state.lock ? Math.max(0, Math.ceil(state.lock.end - this.now())) : null,
       openQuantity: quantity(state)};
     if (state.error) return {...common, status: "error", message: state.error};
-    if (state.lock) return {...common, status: state.lock.confirmed ? "locked" : "pending",
-      message: state.lock.confirmed ? "TradeSea confirmed the account lockout." : "Applying the eight-hour lockout. Server confirmation is pending."};
+    if (this.activeLock()) return {...common, status: "locked", message: "This account has an active TradeSea lockout."};
+    if (state.lock) return {...common, end: null, secondsRemaining: null, status: "starting", message: "Refreshing this account's lockout status…"};
     if (!state.snapshotReady) return {...common, status: "starting", message: "Waiting for a complete account position snapshot."};
     return {...common, status: "ready", message: state.hasOpen
       ? "Monitoring your open trade. The lockout starts when this account is flat."

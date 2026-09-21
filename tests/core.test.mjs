@@ -71,22 +71,23 @@ test("parse both object and JSON-string payloads, ignore unrelated traffic", () 
 });
 test("server response must indicate success and contain valid lockout data", () => {
   assert.equal(readServerLock({status: "success", data: {sessionMetaData: []}}), null);
-  for (const body of [{status: "error", data: {}}, {status: "ok"}, {status: "ok", data: {lockoutStartTimeEpoch: now}}]) {
+  for (const body of [{status: "error", data: {}}, {status: "ok"}, {status: "ok", data: []}, {status: "ok", data: {lockoutStartTimeEpoch: now}}]) {
     assert.throws(() => readServerLock(body));
   }
 });
-test("a shorter server lock cannot shorten the saved eight-hour deadline", () => {
+test("the displayed timer follows TradeSea's current lockout rather than an old request", () => {
   let state = update(seeded([pos("ES", 1)]), [pos("ES", 0)]).state;
   state = reconcileLock(state, {start: now, end: now + 5}, now + 1);
-  assert.equal(state.lock.end, now + 28800);
-  assert.equal(state.lock.confirmed, false);
+  assert.equal(state.lock.end, now + 5);
+  assert.equal(state.lock.confirmed, true);
+  assert.equal(state.lock.reason, "existing");
   state = reconcileLock(state, {start: now, end: now + 40000}, now + 2);
   assert.equal(state.lock.end, now + 40000);
   assert.equal(state.lock.confirmed, true);
 });
-test("only a server check after a confirmed deadline permits re-arming", () => {
+test("a successful unlocked server status clears expired pending requests and resets the snapshot", () => {
   let state = update(seeded([pos("ES", 1)]), [pos("ES", 0)]).state;
-  assert.notEqual(reconcileLock(state, null, now + 50000).lock, null, "unconfirmed locks require attention");
+  assert.equal(reconcileLock(state, null, now + 50000).lock, null, "expired pending requests are not active lockouts");
   state = reconcileLock(state, {start: now, end: now + 28800}, now);
   state = reconcileLock(state, null, now + 28800);
   assert.equal(state.lock, null);
@@ -103,6 +104,12 @@ test("a future scheduled lockout is not moved forward without a completed trade"
 test("server normalization of the start time is accepted once the full lock is active", () => {
   const state = update(seeded([pos("ES", 1)]), [pos("ES", 0)]).state;
   assert.equal(reconcileLock(state, {start: now + 1, end: now + 28800}, now + 2).lock.confirmed, true);
+});
+
+test("an outdated server response cannot clear an existing active timer", () => {
+  const state = reconcileLock(seeded(), {start: now, end: now + 28800}, now + 100);
+  assert.throws(() => reconcileLock(state, null, now), /outdated account status/);
+  assert.equal(state.lock.end, now + 28800);
 });
 test("tampered, corrupt, or repointed saved state is not silently reset", () => {
   const state = seeded();
