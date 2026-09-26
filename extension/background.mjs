@@ -7,13 +7,21 @@ const tabs = new Set();
 const selectedByTab = new Map();
 let currentView = {status: "starting", message: "Open TradeSea in your regular Chrome profile to check protection."};
 let enginePromise;
-let primary = null;
+const primaryStreams = new Map();
+const streamAccount = stream => JSON.stringify([stream.readHost, stream.accountId]);
 const guardInstalled = new Map();
 const connected = (accountId, readHost) => [...streams.values()].some(s => s.connected && s.accountId === accountId && s.readHost === readHost);
 
 async function publish(view) {
   currentView = view;
-  if (view.status === "ready" && !connected(view.accountId, view.readHost)) currentView = {...view, status: "disconnected",
+  if (view.automatic?.enabled) {
+    const accounts = view.automatic.accounts.map(account => account.status === "ready" && !connected(account.accountId, account.readHost)
+      ? {...account, status: "disconnected", message: "Open this account in a TradeSea tab for live monitoring."} : account);
+    currentView = {...view, automatic: {...view.automatic, accounts}};
+    const waiting = accounts.filter(account => account.status === "disconnected");
+    if (waiting.length && view.status === "ready") currentView = {...currentView, status: "disconnected",
+      message: `Waiting for live monitoring: ${waiting.map(account => account.accountName).join(", ")}. Keep a TradeSea tab open for each account you trade.`};
+  } else if (view.status === "ready" && !connected(view.accountId, view.readHost)) currentView = {...view, status: "disconnected",
     message: "Select this protected account in TradeSea and refresh that tab to connect live monitoring."};
   const text = {error: "!", disconnected: "!", locked: "Lock", starting: "…", unselected: "…"}[currentView.status] ?? "";
   await chrome.action.setBadgeText({text});
@@ -76,8 +84,20 @@ async function handle(message, sender) {
       const protector = await engine();
       const result = await protector.selectAccount(message.accountId);
       // A previous primary stream may belong to the old protected account.
-      primary = null;
+      primaryStreams.clear();
       return result.selectionError ? {...currentView, selectionError: result.selectionError} : currentView;
+    }
+    if (["setAutomaticEnabled", "setAutomaticAccount"].includes(message?.type)) {
+      const protector = await engine();
+      try {
+        if (message.type === "setAutomaticEnabled") await protector.setAutomaticEnabled(message.enabled);
+        else await protector.setAutomaticAccount(message.accountId, message.checked);
+        return await maintain(true);
+      } catch (error) {
+        // Preference failures do not overwrite healthy account protection.
+        await publish(protector.view());
+        return {...currentView, preferenceError: error.message};
+      }
     }
     throw new Error("Unsupported popup request.");
   }
@@ -108,19 +128,17 @@ async function handle(message, sender) {
     const info = streamInfo(event.url);
     if (!info) return currentView;
     streams.set(key, {tabId: sender.tab.id, accountId: info.accountId, readHost: info.host, connected: event.connected === true});
-    if (primary === key && !event.connected) primary = null;
+    for (const [account, primary] of primaryStreams) if (primary === key && !event.connected) primaryStreams.delete(account);
     // Avoid a network request for each market-data frame.
     return currentView;
   }
   if (event.kind === "frame" && streams.has(key)) {
     const protector = await engine();
-    // Never interpret another connection's empty snapshot as this account flat.
-    if (streams.get(key).accountId !== protector.accountId ||
-        (protector.state?.readHost && streams.get(key).readHost !== protector.state.readHost)) return currentView;
-    if (streams.get(primary)?.accountId !== protector.accountId ||
-        streams.get(primary)?.readHost !== protector.state?.readHost) primary = null;
-    if (!primary) primary = key;
-    if (primary !== key) return currentView;
+    // One source per account prevents duplicate tabs from replaying snapshots.
+    // The manager routes each frame only to its enrolled, monitored identity.
+    const account = streamAccount(streams.get(key));
+    if (!primaryStreams.has(account)) primaryStreams.set(account, key);
+    if (primaryStreams.get(account) !== key) return currentView;
     await protector.receive(event.frame, streams.get(key));
   }
   return currentView;
@@ -138,7 +156,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   selectedByTab.delete(tabId);
   for (const [key, value] of streams) if (value.tabId === tabId) {
     streams.delete(key);
-    if (primary === key) primary = null;
+    for (const [account, primary] of primaryStreams) if (primary === key) primaryStreams.delete(account);
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -146,7 +164,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   selectedByTab.delete(tabId);
   for (const [key, value] of streams) if (value.tabId === tabId) {
     streams.delete(key);
-    if (primary === key) primary = null;
+    for (const [account, primary] of primaryStreams) if (primary === key) primaryStreams.delete(account);
   }
 });
 async function start() {

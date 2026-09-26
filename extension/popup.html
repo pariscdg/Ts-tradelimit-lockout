@@ -13,11 +13,20 @@
     <div id="status" class="status" aria-live="polite">Checking protection…</div>
     <p id="message">Open TradeSea in your regular Chrome profile.</p>
     <dl>
-      <div><dt>Protected account</dt><dd id="account">Choose an account below</dd></div>
-      <div><dt>Lockout ends</dt><dd id="end">—</dd></div>
+      <div><dt id="account-label">Protected account</dt><dd id="account">Choose an account below</dd></div>
+      <div id="lockout-summary"><dt>Lockout ends</dt><dd id="end">—</dd></div>
     </dl>
-    <section class="selection" aria-label="Choose the protected account">
-      <label for="account-choice">Account to protect</label>
+    <section class="automatic" aria-label="Automatic protection">
+      <label class="toggle-row" for="automatic-enabled">
+        <span>Automatic protection</span>
+        <input id="automatic-enabled" type="checkbox" role="switch" disabled>
+      </label>
+      <p class="note">Check your accounts once. Protection starts automatically and your choices are remembered.</p>
+      <div id="automatic-accounts" role="group" aria-label="Accounts to protect automatically"></div>
+      <p id="automatic-message" class="note" aria-live="polite">Loading accounts…</p>
+    </section>
+    <section id="manual-protection" class="selection" aria-label="Manual protection">
+      <label for="account-choice">Manual protection</label>
       <select id="account-choice" disabled><option value="">Loading your accounts…</option></select>
       <button id="protect-account" type="button" disabled>Protect this account</button>
       <p id="selection-message" class="note" aria-live="polite">Checking available accounts…</p>
@@ -26,7 +35,7 @@
       <summary id="other-lockouts-label">Other locked accounts</summary>
       <ul id="other-lockouts-list"></ul>
     </details>
-    <p class="note">The lockout starts when your open position returns to flat. Keep one TradeSea tab connected while trading.</p>
+    <p class="note">Each account locks for eight hours when its position returns to flat. Keep a connected TradeSea tab for each account you trade. Turning off automatic protection does not cancel open trades or existing lockouts.</p>
     <p class="limit">Local protection can be disabled by this computer’s owner. An irreversible lockout requires TradeSea to reject early changes; that behavior is unverified.</p>
   </main>
   <script src="popup.js"></script>

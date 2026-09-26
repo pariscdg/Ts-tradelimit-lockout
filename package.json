@@ -1,6 +1,6 @@
 {
   "name": "tradesea-one-trade",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "description": "Local Chrome protection for one completed trade followed by an eight-hour account lockout",
   "scripts": {"test": "node --test tests/*.test.mjs"},

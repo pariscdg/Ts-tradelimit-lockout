@@ -27,6 +27,12 @@ export function validateLedger(value) {
     }
   }
   if (!ids.has(value.active)) throw new Error("The selected protected account is missing. Refusing to reset lockouts.");
+  if (value.automatic !== undefined && (typeof value.automatic?.enabled !== "boolean" ||
+      !Array.isArray(value.automatic.recordIds) || new Set(value.automatic.recordIds).size !== value.automatic.recordIds.length ||
+      (value.automatic.enabled && !value.automatic.recordIds.length) ||
+      value.automatic.recordIds.some(id => !ids.has(id) || isUnselected(value.accounts.find(record => record.id === id).state)))) {
+    throw new Error("Saved automatic protection settings are invalid. Existing lockouts have not been reset.");
+  }
   return value;
 }
 
@@ -43,6 +49,12 @@ export class ProtectionManager {
   get active() { return this.engines.get(this.ledger?.active); }
   get accountId() { return this.active?.accountId; }
   get state() { return this.active?.state; }
+  get automatic() { return this.ledger?.automatic ?? {enabled: false, recordIds: []}; }
+
+  monitors(id, engine) {
+    return !!engine.state && !isUnselected(engine.state) && (engine.state.hasOpen || quantity(engine.state) > 0 ||
+      (this.automatic.enabled ? this.automatic.recordIds.includes(id) : id === this.ledger.active));
+  }
 
   async commit(ledger) {
     await this.storage.save(structuredClone(ledger));
@@ -93,10 +105,54 @@ export class ProtectionManager {
     return matches[0];
   }
 
-  canSelect() { return !!this.state && !this.state.hasOpen && quantity(this.state) === 0; }
+  async enroll(account) {
+    let record = this.findRecord(account);
+    if (!record) {
+      const id = Math.max(...this.ledger.accounts.map(item => item.id)) + 1;
+      if (id > 2147483647) throw new Error("Account protection storage is full.");
+      record = {id, state: {...newState(account.accountId), externalAccountId: account.externalAccountId,
+        accountName: account.accountName, readHost: account.readHost}};
+      await this.commit({...this.ledger, accounts: [...this.ledger.accounts, record]});
+      this.createEngine(record);
+    }
+    return record;
+  }
+
+  setAutomaticEnabled(enabled) {
+    return this.run(async () => {
+      if (typeof enabled !== "boolean") throw new Error("Invalid automatic protection setting.");
+      if (enabled && !this.automatic.recordIds.length) throw new Error("Check at least one account first.");
+      await this.commit({...this.ledger, automatic: {...this.automatic, enabled}});
+      return this.emit();
+    });
+  }
+
+  setAutomaticAccount(accountId, checked) {
+    return this.run(async () => {
+      if (!validId(accountId) || typeof checked !== "boolean") throw new Error("Invalid automatic account selection.");
+      let record;
+      if (checked) record = await this.enroll(await this.api.account(accountId));
+      else record = this.ledger.accounts.find(item => item.state.accountId === accountId);
+      if (!record || isUnselected(record.state)) throw new Error("That account is unavailable. Refresh the account list.");
+      const alreadyChecked = this.automatic.recordIds.includes(record.id);
+      if (alreadyChecked === checked) return this.emit();
+      const target = this.engines.get(record.id);
+      // Checking an account while automatic mode is off only saves a preference.
+      // Reading its timer must not start following an unselected open position.
+      const result = await target.maintain({force: true, monitor: this.monitors(record.id, target)});
+      if (target.activeLock()) throw new Error("This account is locked. Its selection can change after the timer ends.");
+      if (target.state.hasOpen || quantity(target.state) > 0) throw new Error("Finish this account's open trade before changing its selection.");
+      if (result.status === "error") throw new Error(result.message);
+      const recordIds = checked ? [...this.automatic.recordIds, record.id] : this.automatic.recordIds.filter(id => id !== record.id);
+      await this.commit({...this.ledger, automatic: {enabled: this.automatic.enabled && recordIds.length > 0, recordIds}});
+      return this.emit();
+    });
+  }
+
+  canSelect() { return !this.automatic.enabled && !!this.state && !this.state.hasOpen && quantity(this.state) === 0; }
 
   view() {
-    const current = isUnselected(this.state) && !this.state.error
+    let current = isUnselected(this.state) && !this.state.error
       ? {status: "unselected", message: "Choose an account below to start protection.",
         accountId: null, accountName: null, readHost: null, end: null, secondsRemaining: null, openQuantity: 0}
       : this.active?.view() ?? {status: "starting", message: "Checking protection…"};
@@ -106,7 +162,26 @@ export class ProtectionManager {
       end: record.state.lock.end, confirmed: record.state.lock.confirmed, error: record.state.error,
       selected: record.id === this.ledger.active
     }));
-    return {...current, canSelect: this.canSelect(), lockouts};
+    const autoAccounts = this.automatic.recordIds.map(id => {
+      const engine = this.engines.get(id);
+      const state = engine.state ?? this.ledger.accounts.find(record => record.id === id).state;
+      return {accountId: state.accountId, accountName: state.accountName, readHost: state.readHost,
+        openQuantity: quantity(state), ...engine.view(), recordId: id, externalAccountId: state.externalAccountId};
+    });
+    if (this.automatic.enabled) {
+      const attention = autoAccounts.find(account => account.status === "error");
+      const checking = autoAccounts.some(account => account.status === "starting");
+      const allLocked = autoAccounts.length > 0 && autoAccounts.every(account => account.status === "locked");
+      current = {accountId: null, readHost: null, accountName: `${autoAccounts.length} selected account${autoAccounts.length === 1 ? "" : "s"}`, end: null,
+        secondsRemaining: null, openQuantity: autoAccounts.reduce((total, account) => total + account.openQuantity, 0),
+        status: attention ? "error" : checking ? "starting" : allLocked ? "locked" : "ready",
+        message: attention ? `${attention.accountName}: ${attention.message}` : checking ? "Checking selected accounts…"
+          : allLocked ? "All checked accounts are locked. Protection resumes when their timers end."
+          : "Automatic protection is on. Each checked account gets one trade, then eight hours off."};
+      for (const lock of lockouts) lock.selected = false;
+    }
+    return {...current, canSelect: this.canSelect(), lockouts,
+      automatic: {enabled: this.automatic.enabled, accounts: autoAccounts}};
   }
 
   async emit() { const view = this.view(); await this.publish(view); return view; }
@@ -115,10 +190,9 @@ export class ProtectionManager {
     return this.run(async () => {
       for (const [id, engine] of this.engines) {
         if (isUnselected(engine.state)) continue;
-        const selected = id === this.ledger.active;
-        const recordedOpen = engine.state && (engine.state.hasOpen || quantity(engine.state) > 0);
-        if (selected || engine.state?.lock || recordedOpen) await engine.maintain({force, monitor: selected || recordedOpen,
-          connected: selected && connected(engine.accountId, engine.state?.readHost)});
+        const monitor = this.monitors(id, engine);
+        if (monitor || engine.state?.lock) await engine.maintain({force, monitor,
+          connected: monitor && connected(engine.accountId, engine.state?.readHost)});
       }
       return this.emit();
     });
@@ -126,14 +200,20 @@ export class ProtectionManager {
 
   receive(raw, source) {
     return this.run(async () => {
-      if (!isUnselected(this.state)) await this.active.receive(raw, source);
+      if (source) {
+        for (const [id, engine] of this.engines) {
+          if (this.monitors(id, engine) && engine.accountId === source.accountId && engine.state.readHost === source.readHost) {
+            await engine.receive(raw, source);
+          }
+        }
+      } else if (!this.automatic.enabled && !isUnselected(this.state)) await this.active.receive(raw);
       return this.emit();
     });
   }
 
   invalidate(message) {
     return this.run(async () => {
-      if (!isUnselected(this.state)) await this.active.invalidate(message);
+      for (const [id, engine] of this.engines) if (this.monitors(id, engine)) await engine.invalidate(message);
       return this.emit();
     });
   }
@@ -165,6 +245,7 @@ export class ProtectionManager {
         const locked = !!local || (activeRemote && !scheduled);
         const end = (local?.end ?? (activeRemote ? remote.end : null)) || null;
         choices.push({...account, end, selectable: !locked && !scheduled && fresh,
+          automaticChecked: !!record && this.automatic.recordIds.includes(record.id),
           lockStatus: locked ? "locked" : scheduled ? "scheduled" : !fresh ? "unknown" : "available"});
       }
       await this.emit();
@@ -175,6 +256,7 @@ export class ProtectionManager {
   selectAccount(accountId) {
     return this.run(async () => {
       try {
+        if (this.automatic.enabled) throw new Error("Automatic protection is on. Choose accounts using the checkboxes above.");
         if (!this.canSelect()) throw new Error("Finish the open trade before changing the protected account.");
         const previous = this.active;
         if (previous.state.lock) {
@@ -191,15 +273,7 @@ export class ProtectionManager {
         }
 
         const account = await this.api.account(accountId);
-        let record = this.findRecord(account);
-        if (!record) {
-          const id = Math.max(...this.ledger.accounts.map(item => item.id)) + 1;
-          if (id > 2147483647) throw new Error("Account protection storage is full.");
-          record = {id, state: {...newState(account.accountId), externalAccountId: account.externalAccountId,
-            accountName: account.accountName, readHost: account.readHost}};
-          await this.commit({...this.ledger, accounts: [...this.ledger.accounts, record]});
-          this.createEngine(record);
-        }
+        const record = await this.enroll(account);
         const target = this.engines.get(record.id);
         const checked = await target.maintain({force: true, connected: false});
         if (target.state?.lock) throw new Error("That account is Locked. Choose an unlocked account; its saved deadline has been preserved.");

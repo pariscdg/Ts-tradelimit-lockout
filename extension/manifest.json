@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TradeSea One Trade",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "minimum_chrome_version": "120",
   "description": "One completed trade, then an eight-hour TradeSea account lockout in your regular browser.",
   "permissions": [

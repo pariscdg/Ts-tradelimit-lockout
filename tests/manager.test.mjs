@@ -371,3 +371,135 @@ test("a failed status read cannot turn an old pending request into a Locked labe
   h.failed.delete("A");
   assert.equal((await h.manager.choices()).find(a => a.accountId === "A").selectable, true);
 });
+
+test("automatic protection saves an opt-in list without monitoring unchecked accounts", async () => {
+  const h = fixture(undefined, null);
+  await h.manager.maintain();
+  assert.equal(h.manager.view().automatic.enabled, false);
+  await assert.rejects(h.manager.setAutomaticEnabled(true), /Check at least one/);
+  await h.manager.setAutomaticAccount("A", true);
+  await h.manager.setAutomaticAccount("B", true);
+  await h.trade("A");
+  assert.equal(h.puts.length, 0, "saved preferences alone do not enable protection");
+  assert.equal(h.calls.filter(call => call.operation === "snapshot").length, 0);
+  await h.manager.setAutomaticEnabled(true);
+  await h.manager.maintain({force: true});
+  await h.trade("C");
+  assert.equal(h.puts.length, 0);
+  assert.equal(h.calls.some(call => call.id === "C"), false);
+  assert.deepEqual(h.manager.view().automatic.accounts.map(account => account.accountId), ["A", "B"]);
+  assert.match((await h.manager.selectAccount("C")).selectionError, /Automatic protection is on/);
+});
+
+test("all checked accounts can trade concurrently with separate eight-hour timers", async () => {
+  const h = fixture(undefined, null);
+  await h.manager.setAutomaticAccount("A", true);
+  await h.manager.setAutomaticAccount("B", true);
+  await h.manager.setAutomaticEnabled(true);
+  await h.manager.maintain({force: true});
+  for (const id of ["A", "B"]) await h.manager.receive({event: "positionUpdates", data: {positions: [position(id, 1)]}}, {accountId: id, readHost: host});
+  await h.manager.receive({event: "unifiedSnapshot", data: {positions: []}}, {accountId: "C", readHost: host});
+  assert.equal(h.puts.length, 0);
+  assert.equal(h.record("A").state.hasOpen, true);
+  await h.manager.receive({event: "positionUpdates", data: {positions: [position("A", 0)]}}, {accountId: "A", readHost: host});
+  assert.equal(h.record("B").state.hasOpen, true);
+  h.now += 30;
+  await h.manager.maintain({force: true, connected: () => true});
+  await h.manager.receive({event: "positionUpdates", data: {positions: [position("B", 0)]}}, {accountId: "B", readHost: host});
+  assert.deepEqual(h.puts.map(put => [put.id, put.end - put.start]), [["A", 28800], ["B", 28800]]);
+  assert.equal(h.remote.B.end - h.remote.A.end, 30);
+  assert.equal(h.rules.size, 2);
+  assert.equal(h.manager.view().status, "locked");
+  await assert.rejects(h.manager.setAutomaticAccount("A", false), /locked/);
+  assert.equal(h.saved.automatic.recordIds.length, 2);
+});
+
+test("automatic selections and independent deadlines survive restart and re-arm after expiry", async () => {
+  const h = fixture(undefined, null);
+  for (const id of ["A", "B"]) await h.manager.setAutomaticAccount(id, true);
+  await h.manager.setAutomaticEnabled(true);
+  await h.manager.maintain({force: true});
+  await h.trade("A");
+  const end = h.remote.A.end;
+  h.manager = h.make();
+  const view = await h.manager.maintain({force: true});
+  assert.equal(view.automatic.enabled, true);
+  assert.equal(view.automatic.accounts.length, 2);
+  assert.equal(h.remote.A.end, end);
+  await h.trade("B");
+  assert.equal(h.puts.length, 2);
+  h.now = end + 1;
+  await h.manager.maintain({force: true});
+  assert.equal(h.manager.view().status, "ready");
+  await h.trade("A");
+  assert.equal(h.puts.length, 3);
+  assert.equal(h.puts.at(-1).start, h.now);
+});
+
+test("turning automatic mode off retains lockouts and finishes already-open trades", async () => {
+  const h = fixture(undefined, null);
+  for (const id of ["A", "B"]) await h.manager.setAutomaticAccount(id, true);
+  await h.manager.setAutomaticEnabled(true);
+  await h.manager.maintain({force: true});
+  await h.trade("A");
+  const end = h.remote.A.end;
+  await h.manager.receive({event: "positionUpdates", data: {positions: [position("B", 1)]}}, {accountId: "B", readHost: host});
+  h.positions.B = [position("B", 1)];
+  await assert.rejects(h.manager.setAutomaticAccount("B", false), /open trade/);
+  await h.manager.setAutomaticEnabled(false);
+  assert.equal(h.manager.view().automatic.enabled, false);
+  assert.equal(h.remote.A.end, end);
+  assert.equal(h.rules.size, 1);
+  await h.manager.receive({event: "positionUpdates", data: {positions: [position("B", 0)]}}, {accountId: "B", readHost: host});
+  assert.deepEqual(h.puts.map(put => put.id), ["A", "B"]);
+  assert.equal(h.rules.size, 2);
+  h.now += 30000;
+  h.positions.B = [];
+  await h.manager.maintain({force: true});
+  await h.trade("B");
+  assert.equal(h.puts.length, 2, "automatic mode stays off for future trades");
+});
+
+test("a disconnected automatic account cannot stop another checked account's lockout", async () => {
+  const h = fixture(undefined, null);
+  for (const id of ["A", "B"]) await h.manager.setAutomaticAccount(id, true);
+  await h.manager.setAutomaticEnabled(true);
+  h.failed.add("A");
+  const view = await h.manager.maintain({force: true});
+  assert.equal(view.status, "error");
+  assert.match(view.message, /Account A.*Offline/);
+  await h.trade("B");
+  assert.deepEqual(h.puts.map(put => put.id), ["B"]);
+  await h.manager.setAutomaticEnabled(false);
+  assert.equal(h.saved.automatic.enabled, false, "turning off does not require a successful network request");
+});
+
+test("automatic account selection follows stable identity when request IDs refresh", async () => {
+  const h = fixture(undefined, null);
+  await h.manager.setAutomaticAccount("A", true);
+  await h.manager.setAutomaticEnabled(true);
+  await h.manager.maintain({force: true});
+  const savedId = h.saved.automatic.recordIds[0];
+  h.accounts[0].accountId = "refreshed-A";
+  const choices = await h.manager.choices();
+  assert.equal(choices.find(account => account.accountId === "refreshed-A").automaticChecked, true);
+  assert.deepEqual(h.saved.automatic.recordIds, [savedId]);
+  const frame = qty => ({event: "positionUpdates", data: {positions: [position("A", qty)]}});
+  await h.manager.receive(frame(1), {accountId: "refreshed-A", readHost: host});
+  await h.manager.receive(frame(0), {accountId: "refreshed-A", readHost: host});
+  assert.equal(h.puts[0].id, "refreshed-A");
+});
+
+test("failed preference writes and corrupt automatic settings do not reset protection", async () => {
+  const h = fixture(undefined, null);
+  await h.manager.setAutomaticAccount("A", true);
+  h.failSave = true;
+  await assert.rejects(h.manager.setAutomaticEnabled(true), /Storage unavailable/);
+  assert.equal(h.manager.view().automatic.enabled, false);
+  const before = structuredClone(h.saved);
+  for (const automatic of [{enabled: true, recordIds: []}, {enabled: true, recordIds: [999]},
+    {enabled: "yes", recordIds: [2]}, {enabled: true, recordIds: [2, 2]}, null]) {
+    assert.throws(() => validateLedger({...before, automatic}), /automatic protection settings/);
+  }
+  assert.deepEqual(h.saved, before);
+});
