@@ -16,6 +16,16 @@
       <div><dt id="account-label">Protected account</dt><dd id="account">Choose an account below</dd></div>
       <div id="lockout-summary"><dt>Lockout ends</dt><dd id="end">—</dd></div>
     </dl>
+    <section class="risk-lock" aria-label="Risk settings lock">
+      <label class="toggle-row" for="risk-lock-enabled">
+        <span>Lock risk settings permanently</span>
+        <input id="risk-lock-enabled" type="checkbox" role="switch" disabled>
+      </label>
+      <p id="risk-lock-account" class="note">Connecting to the account in your TradeSea tab…</p>
+      <p id="risk-lock-message" class="note" aria-live="polite">Save your risk settings first. Once enabled, this account's risk-settings lock has no expiry and cannot be switched off.</p>
+      <button id="risk-reconnect" type="button" hidden>Reconnect TradeSea</button>
+      <ul id="risk-other-locks" class="note" hidden></ul>
+    </section>
     <section class="automatic" aria-label="Automatic protection">
       <label class="toggle-row" for="automatic-enabled">
         <span>Automatic protection</span>

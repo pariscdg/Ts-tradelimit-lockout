@@ -23,7 +23,7 @@ test("Chrome messages, storage, request rules, and API work together without an 
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
     tabs: {sendMessage: async () => {}, query: async () => [{id: 42}], onRemoved: listener("removed"), onUpdated: listener("updated")},
     alarms: {get: async () => ({name: "protection-check"}), create: async () => {}, onAlarm: listener("alarm")},
-    declarativeNetRequest: {updateDynamicRules: async rule => { rules.push(rule); }}
+    declarativeNetRequest: {getDynamicRules: async () => [], updateDynamicRules: async rule => { rules.push(rule); }}
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {

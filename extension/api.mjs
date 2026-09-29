@@ -86,6 +86,15 @@ export class TradeSeaApi {
     return {remote: readServerLock(result.body), serverNow: result.serverNow};
   }
 
+  async riskSettings(accountId) {
+    const result = await this.request(`${IDENTITY}/eum/v1/prop-fund/${encodeURIComponent(accountId)}/risk-limits`, "GET", undefined, "Saved risk settings");
+    const limits = result.body?.data?.riskLimits;
+    if (result.body?.status !== "success" || !limits || typeof limits !== "object" || Array.isArray(limits)) {
+      throw new Error("Could not read this account's saved risk settings. Save them in TradeSea before starting the lock.");
+    }
+    return {serverNow: result.serverNow};
+  }
+
   async setLock(accountId, lock) {
     // Cookies are supplied by Chrome on EVERY request. No copied or cached token.
     const result = await this.request(`${IDENTITY}/eum/v1/prop-fund/${encodeURIComponent(accountId)}/lockout`, "PUT", lockPayload(lock), "Lockout request");

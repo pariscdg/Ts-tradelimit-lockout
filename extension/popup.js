@@ -7,6 +7,13 @@ const selectionMessage = document.getElementById("selection-message");
 const automaticToggle = document.getElementById("automatic-enabled");
 const automaticList = document.getElementById("automatic-accounts");
 const automaticMessage = document.getElementById("automatic-message");
+const riskToggle = document.getElementById("risk-lock-enabled");
+const riskReconnect = document.getElementById("risk-reconnect");
+let riskSelection = null;
+let riskError = "";
+let riskSelectionError = "";
+let riskLoading = true;
+let loadingRiskAccount = false;
 const selectionPrompt = "Choose an unlocked account, then click Protect this account. Other accounts keep their lockouts.";
 const fixedPrompt = "Finish the open trade before changing the protected account.";
 let canSelect = false;
@@ -23,6 +30,29 @@ let preferenceRevision = 0;
 
 function sameAccount(a, b) {
   return a.accountId === b.accountId || (a.externalAccountId && a.externalAccountId === b.externalAccountId && a.readHost === b.readHost);
+}
+
+function renderRisk(view) {
+  const state = view.riskSettings ?? {loading: true, locks: []};
+  const lock = riskSelection && state.locks.find(item => item.accountIds.includes(riskSelection.accountId) || sameAccount(item, riskSelection));
+  riskToggle.checked = !!lock;
+  riskToggle.disabled = busy || !riskSelection || !!lock || !!state.loading || state.enforced === false;
+  riskReconnect.hidden = !!riskSelection || riskLoading;
+  riskReconnect.disabled = busy;
+  document.getElementById("risk-lock-account").textContent = riskSelection ? `Current account: ${riskSelection.accountName}`
+    : riskLoading ? "Connecting to the account in your TradeSea tab…" : riskSelectionError || "Open TradeSea, then reconnect below.";
+  const message = lock ? "Permanently locked. No expiry. This account's risk-settings lock cannot be switched off."
+    : "Save your risk settings in TradeSea first. Once enabled, this account's risk-settings lock is permanent and cannot be switched off.";
+  document.getElementById("risk-lock-message").textContent = riskError || state.error || (busy ? "Saving…" : message);
+  const others = state.locks.filter(item => item !== lock);
+  const list = document.getElementById("risk-other-locks");
+  list.hidden = !others.length;
+  list.replaceChildren();
+  for (const item of others) {
+    const row = document.createElement("li");
+    row.textContent = `${item.accountName} · risk settings permanently locked`;
+    list.append(row);
+  }
 }
 
 function renderAutomatic(view) {
@@ -125,6 +155,7 @@ function renderChoices(view) {
 
 function render(view) {
   lastView = view;
+  renderRisk(view);
   renderAutomatic(view);
   const status = document.getElementById("status");
   status.textContent = labels[view.status] || "Protection needs attention";
@@ -176,7 +207,28 @@ async function loadAccounts() {
     choice.disabled = protect.disabled = true;
     selectionMessage.textContent = error.message;
     renderAutomatic(lastView);
+    renderRisk(lastView);
   } finally { loadingAccounts = false; }
+}
+
+async function loadRiskAccount() {
+  if (busy || loadingRiskAccount) return;
+  loadingRiskAccount = true;
+  const revision = preferenceRevision;
+  try {
+    const result = await chrome.runtime.sendMessage({type: "riskSelection"});
+    if (revision !== preferenceRevision) return;
+    if (riskSelection?.accountId !== result.riskSelection?.accountId) riskError = "";
+    riskSelection = result.riskSelection ?? null;
+    riskSelectionError = result.riskSelectionError || "";
+  } catch {
+    riskSelection = null;
+    riskSelectionError = "The extension connection was interrupted. Reload this popup and reconnect TradeSea.";
+  } finally {
+    loadingRiskAccount = false;
+    riskLoading = false;
+    renderRisk(lastView);
+  }
 }
 
 async function refresh() {
@@ -191,11 +243,42 @@ async function refresh() {
     document.getElementById("message").textContent = "Reload the TradeSea tab and check protection before trading.";
     canSelect = false;
     choice.disabled = protect.disabled = true;
+    riskToggle.disabled = true;
   }
 }
 
 choice.addEventListener("change", () => { protect.disabled = busy || !canSelect || !choice.value || choice.selectedOptions[0]?.disabled; });
 automaticToggle.addEventListener("change", () => saveAutomatic({type: "setAutomaticEnabled", enabled: automaticToggle.checked}));
+riskReconnect.addEventListener("click", async () => {
+  if (busy) return;
+  busy = true;
+  riskError = "";
+  renderRisk(lastView);
+  try {
+    const result = await chrome.runtime.sendMessage({type: "reconnectRiskTab"});
+    riskSelectionError = result.riskSelectionError || "TradeSea is refreshing. Its selected account will connect automatically.";
+  } catch { riskSelectionError = "Could not reconnect. Refresh the TradeSea tab, then reopen this popup."; }
+  busy = false;
+  renderRisk(lastView);
+});
+riskToggle.addEventListener("change", async () => {
+  if (busy || riskToggle.disabled || !riskSelection) return;
+  const enabled = riskToggle.checked;
+  busy = true;
+  preferenceRevision++;
+  riskError = "";
+  render(lastView);
+  try {
+    const view = await chrome.runtime.sendMessage({type: "setRiskLock", enabled, accountId: riskSelection.accountId, tabId: riskSelection.tabId});
+    riskError = view.riskError || "";
+    busy = false;
+    render(view);
+  } catch {
+    busy = false;
+    riskError = "Could not verify the risk lock. Reload the popup and check its status.";
+    render(lastView);
+  }
+});
 protect.addEventListener("click", async () => {
   if (!canSelect || busy || !choice.value || choice.selectedOptions[0]?.disabled) return;
   busy = true;
@@ -215,6 +298,8 @@ protect.addEventListener("click", async () => {
   }
 });
 void loadAccounts();
+void loadRiskAccount();
 void refresh();
 setInterval(refresh, 1000);
 setInterval(loadAccounts, 15000);
+setInterval(loadRiskAccount, 5000);

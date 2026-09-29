@@ -4,7 +4,14 @@
   let alive = false;
   let notice;
   let sending = Promise.resolve();
+  let selectedAccountId = null;
+  let riskPolicy;
   const show = view => {
+    if (view?.riskSettings) {
+      riskPolicy = view.riskSettings;
+      window.postMessage({channel: CHANNEL, kind: "risk-policy", accountIds: riskPolicy.locks.flatMap(lock => lock.accountIds)}, location.origin);
+    }
+    globalThis.tradeSeaRiskPanel?.update(riskPolicy, selectedAccountId);
     const warning = ["error", "disconnected"].includes(view?.status);
     if (!warning) { notice?.remove(); notice = null; return; }
     if (!document.documentElement) return;
@@ -29,11 +36,24 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== CHANNEL) return;
     const message = event.data;
+    if (message.kind === "selectedAccount") {
+      selectedAccountId = message.accountId;
+      globalThis.tradeSeaRiskPanel?.update(riskPolicy, selectedAccountId);
+    }
     if (message.kind === "alive") { alive = true; return; }
     if (["frame", "connection", "fault", "selectedAccount"].includes(message.kind)) send({type: "observe", event: message});
   });
-  chrome.runtime.onMessage.addListener(message => {
+  chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (message.type === "status") show(message.view);
+    if (message.type === "selection-probe") {
+      // Content scripts share this origin's session storage. Read only the
+      // account selector directly; do not depend on a MAIN-world round trip.
+      try {
+        selectedAccountId = window.sessionStorage.getItem("profit_selected_account");
+        globalThis.tradeSeaRiskPanel?.update(riskPolicy, selectedAccountId);
+        reply({accountId: selectedAccountId});
+      } catch { reply({accountId: null}); }
+    }
   });
   const heartbeat = () => {
     window.postMessage({channel: CHANNEL, kind: "probe"}, location.origin);

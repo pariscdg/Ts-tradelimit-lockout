@@ -18,6 +18,10 @@ Turning off automatic protection keeps your account choices, existing lockouts, 
 
 Accounts with an active TradeSea lockout show **Locked until** and their end time. Locked accounts are greyed out; other accounts remain available.
 
+To freeze risk settings, save your limits in TradeSea, select that account, and turn on **Lock risk settings permanently**. Its risk panel and toggle stay locked across Chrome restarts, with no expiry or off switch. Existing saved risk locks become permanent after updating. Other accounts and order controls remain available.
+
+After updating the extension, refresh your TradeSea tab. If its current account is missing from the popup, click **Reconnect TradeSea** to refresh and reconnect that tab.
+
 The extension sends one eight-hour lockout request after a completed trade. There is no confirmation-pending workflow or automatic resubmission. TradeSea's current timer controls the displayed lock status.
 
 Local extension protection can be disabled and cannot guarantee an irreversible lockout.

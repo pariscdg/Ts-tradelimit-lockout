@@ -3,6 +3,89 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import vm from "node:vm";
 
+test("risk toggle targets the current tab account, stays disabled while locked, and follows account switches", async () => {
+  class Element {
+    constructor() { this.children = []; this.dataset = {}; this.textContent = ""; this.value = ""; this.events = {}; }
+    append(child) { this.children.push(child); }
+    replaceChildren() { this.children = []; }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    get options() { return this.children; }
+    get selectedOptions() { return this.children.filter(child => child.value === this.value); }
+  }
+  const elements = new Map();
+  const element = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  const accounts = ["A", "B"].map(accountId => ({accountId, accountName: `Account ${accountId}`,
+    externalAccountId: `external-${accountId}`, readHost: "prod-trade-read.tradesea.ai", selectable: true}));
+  let selected = accounts[0];
+  let locks = [];
+  let selectionFails = false;
+  let failFirstEnable = true;
+  let riskFailure = null;
+  const sent = [];
+  const intervals = [];
+  const view = () => ({status: "ready", message: "Monitoring", canSelect: true, accountId: "B", accountName: "Account B",
+    riskSettings: {locks: structuredClone(locks), error: riskFailure, enforced: true}});
+  const context = vm.createContext({document: {getElementById: element, createElement: () => new Element()},
+    chrome: {runtime: {sendMessage: async message => {
+      sent.push(message);
+      if (message.type === "riskSelection") {
+        if (selectionFails) throw new Error("Connection lost");
+        return {riskSelection: {...selected, tabId: 42}};
+      }
+      if (message.type === "selection") return {accounts, view: view()};
+      if (message.type === "setRiskLock") {
+        if (failFirstEnable) {
+          failFirstEnable = false;
+          riskFailure = "Temporary connection error. Try again.";
+          return {...view(), riskError: riskFailure};
+        }
+        riskFailure = null;
+        locks.push({...selected, accountIds: [selected.accountId], end: null, permanent: true});
+      }
+      return view();
+    }}}, setInterval: (callback, ms) => intervals.push({callback, ms}), Date});
+  vm.runInContext(await readFile(new URL("../extension/popup.js", import.meta.url), "utf8"), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const toggle = element("risk-lock-enabled");
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.checked, false);
+  assert.equal(element("risk-lock-account").textContent, "Current account: Account A");
+  toggle.checked = true;
+  await toggle.events.change();
+  assert.equal(toggle.checked, false, "a failed attempt never claims the lock is active");
+  assert.equal(toggle.disabled, false, "a transient error must allow another attempt");
+  assert.match(element("risk-lock-message").textContent, /Temporary connection error/);
+  toggle.checked = true;
+  await toggle.events.change();
+  const request = sent.find(message => message.type === "setRiskLock");
+  assert.equal(request.accountId, "A", "risk locking uses the live account rather than the manual protection dropdown");
+  assert.equal(request.tabId, 42);
+  assert.equal(request.enabled, true);
+  assert.equal(request.seconds, undefined);
+  assert.equal(toggle.checked, true);
+  assert.equal(toggle.disabled, true);
+  assert.match(element("risk-lock-message").textContent, /Permanently locked\. No expiry/);
+  assert.doesNotMatch(element("risk-lock-message").textContent, /remaining|until|5 p\.m\./);
+  await toggle.events.change();
+  assert.equal(sent.filter(message => message.type === "setRiskLock").length, 2);
+  selected = accounts[1];
+  await intervals.find(timer => timer.ms === 5000).callback();
+  assert.equal(toggle.checked, false);
+  assert.equal(toggle.disabled, false);
+  assert.match(element("risk-other-locks").children[0].textContent, /Account A · risk settings permanently locked/);
+  selected = accounts[0];
+  await intervals.find(timer => timer.ms === 5000).callback();
+  assert.equal(toggle.checked, true);
+  assert.equal(toggle.disabled, true);
+  await intervals.find(timer => timer.ms === 1000).callback();
+  assert.equal(toggle.checked, true);
+  assert.equal(toggle.disabled, true);
+  selectionFails = true;
+  await intervals.find(timer => timer.ms === 5000).callback();
+  assert.equal(toggle.disabled, true, "lost selection cannot arm a stale account");
+  assert.equal(element("risk-reconnect").hidden, false);
+});
+
 // Exercise the shipped popup with a minimal DOM. No Chrome session or API is used.
 test("the popup disables only the timed locked row and removes its label after refresh", async () => {
   class Element {

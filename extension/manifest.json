@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TradeSea One Trade",
-  "version": "2.4.0",
+  "version": "2.6.0",
   "minimum_chrome_version": "120",
   "description": "One completed trade, then an eight-hour TradeSea account lockout in your regular browser.",
   "permissions": [
@@ -13,7 +13,9 @@
     "https://app.tradesea.ai/*",
     "https://prod-identity.tradesea.ai/*",
     "https://prod-trade-read.tradesea.ai/*",
-    "https://api-trades-r-delprod.tradesea.ai/*"
+    "https://api-trades-r-delprod.tradesea.ai/*",
+    "https://prod-trade-write.tradesea.ai/*",
+    "https://api-trades-w-delprod.tradesea.ai/*"
   ],
   "background": {
     "service_worker": "background.mjs",
@@ -29,6 +31,7 @@
         "https://app.tradesea.ai/*"
       ],
       "js": [
+        "risk-panel.js",
         "bridge.js"
       ],
       "run_at": "document_start",
@@ -39,6 +42,7 @@
         "https://app.tradesea.ai/*"
       ],
       "js": [
+        "risk-network.js",
         "observe.js"
       ],
       "run_at": "document_start",

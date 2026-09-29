@@ -20,7 +20,7 @@ test("Chrome routes simultaneous automatic accounts independently and persists t
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
     tabs: {sendMessage: async () => {}, query: async () => [{id: 1}], onRemoved: listener("removed"), onUpdated: listener("updated")},
     alarms: {get: async () => ({}), create: async () => {}, onAlarm: listener("alarm")},
-    declarativeNetRequest: {updateDynamicRules: async () => {}}
+    declarativeNetRequest: {getDynamicRules: async () => [], updateDynamicRules: async () => {}}
   };
   globalThis.fetch = async (url, options) => {
     let body;

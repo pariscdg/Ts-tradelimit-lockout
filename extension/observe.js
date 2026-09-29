@@ -5,9 +5,9 @@
   const add = EventTarget.prototype.addEventListener;
   const streams = new Map();
   const emit = data => post({channel: CHANNEL, ...data}, location.origin);
-  const selectedAccount = () => {
-    try { emit({kind: "selectedAccount", accountId: window.sessionStorage.getItem("profit_selected_account")}); }
-    catch { emit({kind: "selectedAccount", accountId: null}); }
+  const selectedAccount = nonce => {
+    try { emit({kind: "selectedAccount", accountId: window.sessionStorage.getItem("profit_selected_account"), ...(nonce ? {nonce} : {})}); }
+    catch { emit({kind: "selectedAccount", accountId: null, ...(nonce ? {nonce} : {})}); }
   };
   const validSocket = value => {
     try {
@@ -106,7 +106,7 @@
     if (event.source === window && event.origin === location.origin &&
         event.data?.channel === CHANNEL && event.data.kind === "probe") {
       emit({kind: "alive"});
-      selectedAccount();
+      selectedAccount(event.data.nonce);
       for (const [id, stream] of streams) connection(id, stream.url, stream.connected);
     }
   });

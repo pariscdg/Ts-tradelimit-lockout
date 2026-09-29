@@ -1,18 +1,23 @@
 import {TradeSeaApi} from "./api.mjs";
 import {ProtectionManager} from "./manager.mjs";
 import {lockRule, streamInfo, validId} from "./core.mjs";
+import {RiskSettingsLock, isRiskRule} from "./risk-lock.mjs";
 
 const streams = new Map();
 const tabs = new Set();
 const selectedByTab = new Map();
 let currentView = {status: "starting", message: "Open TradeSea in your regular Chrome profile to check protection."};
 let enginePromise;
+let riskPromise;
+let riskModel;
+const riskView = () => riskModel?.view() ?? {loading: true, locks: [], error: null};
 const primaryStreams = new Map();
 const streamAccount = stream => JSON.stringify([stream.readHost, stream.accountId]);
 const guardInstalled = new Map();
 const connected = (accountId, readHost) => [...streams.values()].some(s => s.connected && s.accountId === accountId && s.readHost === readHost);
 
 async function publish(view) {
+  view = {...view, riskSettings: riskView()};
   currentView = view;
   if (view.automatic?.enabled) {
     const accounts = view.automatic.accounts.map(account => account.status === "ready" && !connected(account.accountId, account.readHost)
@@ -31,6 +36,46 @@ async function publish(view) {
     try { await chrome.tabs.sendMessage(tabId, {type: "status", view: currentView}); }
     catch { tabs.delete(tabId); }
   }
+}
+
+function riskEngine() {
+  if (!riskPromise) riskPromise = (async () => {
+    await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
+    riskModel = new RiskSettingsLock({api: new TradeSeaApi(), storage: {
+      load: async () => (await chrome.storage.local.get("riskSettingsLocks")).riskSettingsLocks,
+      save: async ledger => chrome.storage.local.set({riskSettingsLocks: ledger})
+    }, rules: async desired => {
+      const existing = (await chrome.declarativeNetRequest.getDynamicRules()).filter(isRiskRule);
+      if (existing.length && !riskModel.hadLedger) throw new Error("Risk-lock records are missing. Existing browser restrictions have been retained.");
+      if (JSON.stringify(existing) === JSON.stringify(desired)) return;
+      await chrome.declarativeNetRequest.updateDynamicRules({removeRuleIds: existing.map(rule => rule.id), addRules: desired});
+    }});
+    return riskModel;
+  })();
+  return riskPromise;
+}
+
+async function refreshRisk(force = false) {
+  try { return await (await riskEngine()).refresh(force); }
+  catch { return riskView(); }
+}
+
+async function activeTradeSeaTab() {
+  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  if (!tab || !tab.url || new URL(tab.url).origin !== "https://app.tradesea.ai" || tab.incognito) {
+    throw new Error("Open the TradeSea trading tab, then open this extension from that tab.");
+  }
+  return tab;
+}
+
+async function selectedRiskAccount() {
+  const tab = await activeTradeSeaTab();
+  let selected;
+  try {
+    selected = await chrome.tabs.sendMessage(tab.id, {type: "selection-probe"});
+  } catch { throw new Error("Reconnect TradeSea below to refresh the tab after the extension update."); }
+  if (!validId(selected?.accountId)) throw new Error("The tab has not connected its selected account. Reconnect TradeSea below, then select your account.");
+  return {tabId: tab.id, accountId: selected.accountId};
 }
 
 function engine() {
@@ -58,6 +103,7 @@ function engine() {
 }
 
 async function maintain(force = false) {
+  await refreshRisk(force);
   try {
     const protector = await engine();
     await protector.maintain({force, connected});
@@ -73,12 +119,29 @@ function isTradeSea(sender) {
 
 async function handle(message, sender) {
   if (sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html") && !sender.tab) {
-    if (message?.type === "status") return currentView;
+    if (message?.type === "status") {
+      await refreshRisk();
+      return {...currentView, riskSettings: riskView()};
+    }
     if (message?.type === "selection") {
       const protector = await engine();
       const accounts = await protector.choices();
       const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true});
-      return {accounts, view: currentView, selectedAccountId: selectedByTab.get(activeTab?.id) ?? null};
+      return {accounts, view: {...currentView, riskSettings: riskView()}, selectedAccountId: selectedByTab.get(activeTab?.id) ?? null};
+    }
+    if (message?.type === "riskSelection") {
+      try {
+        const selection = await selectedRiskAccount();
+        const account = await new TradeSeaApi().account(selection.accountId);
+        return {riskSelection: {...selection, accountName: account.accountName, externalAccountId: account.externalAccountId, readHost: account.readHost}};
+      } catch (error) { return {riskSelection: null, riskSelectionError: error.message}; }
+    }
+    if (message?.type === "reconnectRiskTab") {
+      try {
+        const tab = await activeTradeSeaTab();
+        await chrome.tabs.reload(tab.id);
+        return {reconnecting: true};
+      } catch (error) { return {riskSelectionError: error.message}; }
     }
     if (message?.type === "selectAccount" && validId(message.accountId)) {
       const protector = await engine();
@@ -99,6 +162,22 @@ async function handle(message, sender) {
         return {...currentView, preferenceError: error.message};
       }
     }
+    if (message?.type === "setRiskLock") {
+      try {
+        const selection = await selectedRiskAccount();
+        if (!selection || selection.tabId !== message.tabId || selection.accountId !== message.accountId || typeof message.enabled !== "boolean") {
+          throw new Error("The selected TradeSea account changed or disconnected. Refresh the popup before locking risk settings.");
+        }
+        const risk = await riskEngine();
+        if (message.enabled) await risk.enable(selection.accountId);
+        else await risk.disable(selection.accountId);
+        await publish(currentView);
+        return currentView;
+      } catch (error) {
+        await publish(currentView);
+        return {...currentView, riskError: error.message};
+      }
+    }
     throw new Error("Unsupported popup request.");
   }
   if (!isTradeSea(sender)) throw new Error("Unsupported message source.");
@@ -113,8 +192,10 @@ async function handle(message, sender) {
   if (message.type !== "observe") throw new Error("Unsupported request.");
   const event = message.event;
   if (event?.kind === "selectedAccount") {
+    const changed = selectedByTab.get(sender.tab.id) !== event.accountId;
     if (validId(event.accountId)) selectedByTab.set(sender.tab.id, event.accountId);
     else selectedByTab.delete(sender.tab.id);
+    if (changed) { await refreshRisk(true); await publish(currentView); }
     return currentView;
   }
   if (event?.kind === "fault") {

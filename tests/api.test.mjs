@@ -11,6 +11,21 @@ const lock = {start: time, end: time + 28800};
 const lockBody = {status: "success", data: {lockoutStartTimeEpoch: lock.start, lockoutEndTimeEpoch: lock.end}};
 const flatDemo = JSON.parse(await readFile(new URL("./fixtures/flat-demo-snapshot.json", import.meta.url), "utf8"));
 
+test("risk settings are read without updating or clearing their values", async () => {
+  const calls = [];
+  const api = new TradeSeaApi(async (url, options) => {
+    calls.push({url, options});
+    return response({status: "success", data: {riskLimits: {personalDailyLossLimit: 600, personalDailyAction: "liquidateAndBlock"}}});
+  });
+  assert.deepEqual(await api.riskSettings("saved-account"), {serverNow: time});
+  assert.equal(calls[0].url, "https://prod-identity.tradesea.ai/eum/v1/prop-fund/saved-account/risk-limits");
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(calls[0].options.body, undefined);
+  for (const body of [{status: "error"}, {status: "success", data: {}}, {status: "success", data: {riskLimits: []}}]) {
+    await assert.rejects(new TradeSeaApi(async () => response(body)).riskSettings("saved-account"), /Could not read/);
+  }
+});
+
 test("default fetch keeps the worker-global receiver required by Chrome", async () => {
   const originalFetch = globalThis.fetch;
   const receivers = [];
