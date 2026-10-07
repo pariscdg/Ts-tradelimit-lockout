@@ -71,6 +71,7 @@ export class RiskSettingsLock {
     this.tail = Promise.resolve();
     this.lastRefresh = -Infinity;
     this.error = null;
+    this.availableIdentities = null;
     this.rulesReady = false;
     this.hadLedger = false;
   }
@@ -109,7 +110,10 @@ export class RiskSettingsLock {
   }
 
   view() {
-    return {error: this.error, enforced: this.rulesReady, locks: (this.ledger?.locks ?? []).map(lock => ({
+    const locks = this.ledger?.locks ?? [];
+    const visibleLocks = this.availableIdentities === null ? locks
+      : locks.filter(lock => this.availableIdentities.has(JSON.stringify([lock.externalAccountId, lock.readHost])));
+    return {error: this.error, enforced: this.rulesReady, locks: visibleLocks.map(lock => ({
       accountIds: [...lock.accountIds], externalAccountId: lock.externalAccountId, readHost: lock.readHost,
       accountName: lock.accountName, start: lock.start, end: null, permanent: true
     }))};
@@ -158,12 +162,17 @@ export class RiskSettingsLock {
       if (!this.ledger.locks.length || (!force && this.monotonic() - this.lastRefresh < 30000)) return this.view();
       this.lastRefresh = this.monotonic();
       const accounts = await this.api.accounts();
+      this.availableIdentities = new Set(accounts.map(account => JSON.stringify([account.externalAccountId, account.readHost])));
       const nextLocks = [];
       let error = null;
       for (const lock of this.ledger.locks) {
         const matches = accounts.filter(account => sameIdentity(lock, account));
         const account = matches.length === 1 ? matches[0] : null;
-        if (!account || !Number.isFinite(account.serverNow) || account.serverNow < lock.serverTimeFloor) {
+        // A successful account-list read confirms a missing account is no
+        // longer in TradeSea's dropdown. Keep its permanent rules and ledger
+        // entry, but omit it from the active lock list without an error.
+        if (!account) continue;
+        if (!Number.isFinite(account.serverNow) || account.serverNow < lock.serverTimeFloor) {
           nextLocks.push(lock);
           error = "Reconnect this account to TradeSea to update its account connection. Its existing lock remains in place.";
           continue;
