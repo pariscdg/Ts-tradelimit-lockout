@@ -186,8 +186,50 @@ export class ProtectionManager {
 
   async emit() { const view = this.view(); await this.publish(view); return view; }
 
+  async pruneUnavailable(accounts) {
+    const available = account => accounts.some(candidate => account.externalAccountId
+      ? candidate.externalAccountId === account.externalAccountId && candidate.readHost === account.readHost
+      : candidate.accountId === account.accountId);
+    const removed = this.ledger.accounts.filter(record => !isUnselected(record.state) && !available(record.state));
+    if (!removed.length) return;
+
+    // Drop stale entries only after the live account dropdown was fetched
+    // successfully. Remove their request guards before committing the new list.
+    const removedIds = new Set(removed.map(record => record.id));
+    let records = this.ledger.accounts.filter(record => !removedIds.has(record.id));
+    const remainingAutomatic = this.automatic.recordIds.filter(id => !removedIds.has(id));
+    const automatic = {enabled: this.automatic.enabled && remainingAutomatic.length > 0, recordIds: remainingAutomatic};
+    let active = this.ledger.active;
+    let placeholder = null;
+    if (removedIds.has(active)) {
+      const id = Math.max(0, ...records.map(record => record.id)) + 1;
+      placeholder = {id, state: newState(UNSELECTED_ACCOUNT)};
+      records = [...records, placeholder];
+      active = id;
+    }
+    const nextLedger = {...this.ledger, active, accounts: records, automatic};
+    const disabled = [];
+    try {
+      for (const record of removed) {
+        const engine = this.engines.get(record.id);
+        await engine.guard(false, record.state.accountId);
+        disabled.push({record, engine});
+      }
+      await this.commit(nextLedger);
+    } catch (error) {
+      for (const {record, engine} of disabled) await engine.guard(!!engine.activeLock(), record.state.accountId);
+      throw error;
+    }
+    for (const {record} of disabled) this.engines.delete(record.id);
+    if (placeholder) this.createEngine(placeholder);
+  }
+
   maintain({force = false, connected = () => false} = {}) {
     return this.run(async () => {
+      if (this.ledger.accounts.some(record => !isUnselected(record.state))) {
+        const accounts = await this.api.accounts();
+        await this.pruneUnavailable(accounts);
+      }
       for (const [id, engine] of this.engines) {
         if (isUnselected(engine.state)) continue;
         const monitor = this.monitors(id, engine);
@@ -219,9 +261,12 @@ export class ProtectionManager {
   }
 
   async choices() {
-    const revisions = await this.run(async () => new Map(this.ledger.accounts.map(record => [record.id, record.state.revision])));
     // A slow dropdown lookup must not hold up a completed trade's lockout.
     const accounts = await this.api.accounts();
+    const revisions = await this.run(async () => {
+      await this.pruneUnavailable(accounts);
+      return new Map(this.ledger.accounts.map(record => [record.id, record.state.revision]));
+    });
     const checks = await Promise.allSettled(accounts.map(account => this.api.getLock(account.accountId)));
     return this.run(async () => {
       const choices = [];
@@ -258,21 +303,16 @@ export class ProtectionManager {
       try {
         if (this.automatic.enabled) throw new Error("Automatic protection is on. Choose accounts using the checkboxes above.");
         if (!this.canSelect()) throw new Error("Finish the open trade before changing the protected account.");
+        const accounts = await this.api.accounts();
+        await this.pruneUnavailable(accounts);
+        const account = accounts.find(item => item.accountId === accountId);
+        if (!account) throw new Error("Choose an account currently available in the TradeSea account dropdown. Protection has not switched accounts.");
         const previous = this.active;
         if (previous.state.lock) {
           await previous.save();
           await previous.guard(!!previous.activeLock(), previous.accountId);
-        } else if (previous.state.externalAccountId) {
-          const current = await this.api.account(previous.accountId, {
-            externalAccountId: previous.state.externalAccountId, readHost: previous.state.readHost
-          });
-          await previous.enqueue(async () => previous.adoptAccount(current));
-          const checked = await previous.maintain({force: true, connected: false});
-          if (checked.status === "error") throw new Error(checked.message);
-          if (!this.canSelect()) throw new Error("Finish the open trade before changing the protected account.");
         }
 
-        const account = await this.api.account(accountId);
         const record = await this.enroll(account);
         const target = this.engines.get(record.id);
         const checked = await target.maintain({force: true, connected: false});
